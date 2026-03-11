@@ -1,0 +1,4 @@
+.codex/
+bootstrap/hosts/.env.production
+!bootstrap/hosts/.env.example
+tests/.tmp/
