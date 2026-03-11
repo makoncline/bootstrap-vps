@@ -2,3 +2,5 @@
 bootstrap/hosts/.env.production
 !bootstrap/hosts/.env.example
 tests/.tmp/
+__pycache__/
+*.pyc
