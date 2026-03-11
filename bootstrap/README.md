@@ -123,3 +123,28 @@ On the server itself, the admin user can send a one-off message directly:
 ```bash
 notify "deploy finished"
 ```
+
+## Manual GitHub Setup
+
+GitHub SSH auth is intentionally not part of bootstrap. If the server needs to clone or push repos directly:
+
+1. Set git identity on the server:
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
+2. Generate a dedicated SSH key on the server, for example:
+
+```bash
+ssh-keygen -t ed25519 -C "makon-dev-0 github" -f ~/.ssh/github_ed25519
+```
+
+3. Add the public key to GitHub.
+4. Add a host stanza in `~/.ssh/config` if you want to force that key for `github.com`.
+5. Verify with:
+
+```bash
+ssh -T git@github.com
+```

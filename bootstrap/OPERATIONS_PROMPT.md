@@ -13,4 +13,5 @@ Use this when you need to manually walk a fresh Hetzner Ubuntu 24.04 server thro
 9. Confirm `~/.codex/skills/server-new-app/SKILL.md` exists for the server operator user.
 10. Confirm `unattended-upgrades` is installed, `/etc/docker/daemon.json` has log rotation, and `systemctl status bootstrap-healthcheck.timer` is healthy.
 11. If Telegram credentials were provided, run `notify "[<HOSTNAME>] telegram test"` as the admin user and confirm the message arrives.
-12. Confirm public SSH to the server IP fails, `docker compose version` works on the server, `tailscale status` is healthy, `codex --version` works, and `https://<SMOKE_HOSTNAME>` serves the sample `whoami` app through the tunnel.
+12. If the server needs GitHub access, generate a dedicated SSH key, add it to GitHub, and verify `ssh -T git@github.com`.
+13. Confirm public SSH to the server IP fails, `docker compose version` works on the server, `tailscale status` is healthy, `codex --version` works, and `https://<SMOKE_HOSTNAME>` serves the sample `whoami` app through the tunnel.

@@ -33,6 +33,11 @@ Useful follow-ups:
 ./bootstrap/local/test-telegram-alert.sh bootstrap/hosts/.env.production
 ```
 
+Manual one-time server setup that is not part of bootstrap:
+
+- configure GitHub SSH access on the server if you want it to clone or push repos directly
+- set `git config --global user.name` and `git config --global user.email` on the server
+
 On the server, you can send a one-off Telegram message with:
 
 ```bash
