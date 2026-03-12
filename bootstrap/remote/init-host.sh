@@ -535,6 +535,10 @@ notify_message() {
   /usr/local/bin/notify "$message" >/dev/null 2>&1 || true
 }
 
+schedule_proxy_restart() {
+  nohup bash -lc 'sleep 2; docker compose -f /srv/stacks/proxy/compose.yaml restart caddy >/dev/null 2>&1' >/dev/null 2>&1 &
+}
+
 copy_if_changed() {
   local source target
   source=$1
