@@ -8,6 +8,7 @@ Bootstrap for a fresh Hetzner Ubuntu 24.04 VPS using:
 - Cloudflare Tunnel for public ingress
 - unattended security updates and Docker log rotation
 - a lightweight healthcheck timer with optional Telegram alerts
+- an optional authenticated deploy webhook for app repos
 - a minimal interactive `zsh` setup for the admin user
 - Codex CLI plus repo-managed skills on the server
 
@@ -27,11 +28,18 @@ Useful follow-ups:
 
 ```bash
 ./bootstrap/local/reconcile-host.sh bootstrap/hosts/.env.production
+./bootstrap/local/configure-deploy-target.sh bootstrap/hosts/.env.production daylilycatalog /srv/stacks/daylilycatalog https://vps-test.daylilycatalog.com
+./bootstrap/local/restart-proxy.sh bootstrap/hosts/.env.production
 ./bootstrap/local/sync-codex-skills.sh bootstrap/hosts/.env.production
 ./bootstrap/local/sync-local-codex-home.sh
 ./bootstrap/local/sync-local-codex-skills.sh
 ./bootstrap/local/test-telegram-alert.sh bootstrap/hosts/.env.production
+./bootstrap/local/test-deploy-webhook.sh bootstrap/hosts/.env.production daylilycatalog main-deadbeef
 ```
+
+When you add or change Caddy route files under `/srv/stacks/proxy/sites` on the server, use `bootstrap/local/restart-proxy.sh`. This bootstrap runs Caddy with the admin API disabled, so `caddy reload` is not the right apply path.
+
+If you enable `DEPLOY_WEBHOOK_HOSTNAME` and `DEPLOY_WEBHOOK_TOKEN` in [`bootstrap/hosts/.env.example`](/Users/makon/dev/servers/bootstrap/hosts/.env.example), bootstrap will also install a small authenticated deploy webhook on the server. App repos can call it after a successful image push.
 
 Manual one-time server setup that is not part of bootstrap:
 

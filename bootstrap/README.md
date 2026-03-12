@@ -8,8 +8,11 @@ This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the ex
 - `bootstrap/hosts/.env.production`: ignored working copy for the server you are bootstrapping.
 - `bootstrap/local/bootstrap-host.sh`: main entrypoint from this Mac.
 - `bootstrap/local/reconcile-host.sh`: reruns the idempotent remote converger on an existing host over Tailscale SSH.
+- `bootstrap/local/configure-deploy-target.sh`: registers a named deploy target for the managed webhook on an existing host.
+- `bootstrap/local/restart-proxy.sh`: restarts the managed Caddy proxy stack on an existing host so new route files take effect.
 - `bootstrap/local/cloudflare-tunnel.sh`: syncs remote-managed tunnel ingress and DNS routes through the Cloudflare API.
 - `bootstrap/local/codex-login.sh`: opens an interactive Codex login session over Tailscale SSH on the server.
+- `bootstrap/local/test-deploy-webhook.sh`: calls the managed deploy webhook for a named target and image tag.
 - `bootstrap/local/sync-local-codex-home.sh`: syncs repo-managed global Codex defaults, including `AGENTS.md` and `machine-notes.md`, onto this machine.
 - `bootstrap/local/test-telegram-alert.sh`: sends a Telegram test message through the server's alert script.
 - `bootstrap/local/sync-local-codex-skills.sh`: syncs repo-managed Codex skills into this machine's global Codex skills directory.
@@ -28,6 +31,7 @@ This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the ex
 - `SMOKE_HOSTNAME`: one specific hostname covered by `TUNNEL_HOSTNAMES` and routed by the sample Caddy config, for example `whoami.makon.dev`.
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`: optional Telegram credentials for health alerts.
 - `HEALTHCHECK_DISK_PCT`: optional disk usage alert threshold for `/`, default `85`.
+- `DEPLOY_WEBHOOK_HOSTNAME` and `DEPLOY_WEBHOOK_TOKEN`: optional deploy webhook hostname and shared secret. The hostname should usually already be covered by `TUNNEL_HOSTNAMES`.
 
 ## Usage
 
@@ -79,6 +83,7 @@ To apply updated bootstrap logic to an already-bootstrapped host over Tailscale:
 - a systemd timer runs a lightweight healthcheck every 5 minutes against Docker, Tailscale, disk usage, and `https://<SMOKE_HOSTNAME>`.
 - if Telegram credentials are present, healthcheck failures and recoveries are sent to that chat.
 - `notify "message"` is available for the admin user on the server and sends a one-off Telegram alert without `sudo`.
+- if deploy webhook credentials are present, a small authenticated webhook service runs on the host and is reverse proxied through the managed Caddy stack.
 - Cloudflare wildcard or exact DNS CNAMEs point at `<TUNNEL_ID>.cfargotunnel.com`.
 - Public SSH and all other public ingress are disabled once Tailscale SSH is verified.
 
@@ -123,6 +128,33 @@ On the server itself, the admin user can send a one-off message directly:
 ```bash
 notify "deploy finished"
 ```
+
+To register a deploy target for an app stack:
+
+```bash
+./bootstrap/local/configure-deploy-target.sh bootstrap/hosts/.env.production daylilycatalog /srv/stacks/daylilycatalog https://vps-test.daylilycatalog.com
+```
+
+To test the managed deploy webhook once a target exists:
+
+```bash
+./bootstrap/local/test-deploy-webhook.sh bootstrap/hosts/.env.production daylilycatalog main-deadbeef
+```
+
+The webhook accepts `POST https://<DEPLOY_WEBHOOK_HOSTNAME>/deploy/<target>` with:
+
+- `Authorization: Bearer <DEPLOY_WEBHOOK_TOKEN>`
+- JSON body like `{"image_tag":"main-deadbeef","clear_cache":false}`
+
+The host-side deploy runner updates `IMAGE_TAG`, runs `docker compose pull && docker compose up -d`, smoke-checks the configured URL, and sends Telegram notifications that include the previous image tag, attempted image tag, and rollback status.
+
+When you add or update route files under `/srv/stacks/proxy/sites`, apply them by restarting the managed Caddy container instead of using `caddy reload`:
+
+```bash
+./bootstrap/local/restart-proxy.sh bootstrap/hosts/.env.production
+```
+
+This bootstrap sets `admin off` in the managed Caddyfile, so the admin API reload endpoint is intentionally unavailable.
 
 ## Manual GitHub Setup
 

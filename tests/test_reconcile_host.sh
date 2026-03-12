@@ -36,6 +36,8 @@ TUNNEL_HOSTNAMES=*.makon.dev,*.daylilycatalog.com
 TELEGRAM_BOT_TOKEN=telegram-token
 TELEGRAM_CHAT_ID=123456
 HEALTHCHECK_DISK_PCT=90
+DEPLOY_WEBHOOK_HOSTNAME=deploy.makon.dev
+DEPLOY_WEBHOOK_TOKEN=deploy-token
 EOF
 
 PATH="$BIN_DIR:$PATH" \
@@ -48,6 +50,8 @@ grep -q 'makon@makon-dev-0 .*init-host.sh' "$LOG_FILE"
 grep -q 'TELEGRAM_BOT_TOKEN=telegram-token' "$TMP_DIR/captured/host.env"
 grep -q 'TELEGRAM_CHAT_ID=123456' "$TMP_DIR/captured/host.env"
 grep -q 'HEALTHCHECK_DISK_PCT=90' "$TMP_DIR/captured/host.env"
+grep -q 'DEPLOY_WEBHOOK_HOSTNAME=deploy.makon.dev' "$TMP_DIR/captured/host.env"
+grep -q 'DEPLOY_WEBHOOK_TOKEN=deploy-token' "$TMP_DIR/captured/host.env"
 
 PATH="$BIN_DIR:$PATH" \
 TEST_SSH_LOG="$LOG_FILE" \

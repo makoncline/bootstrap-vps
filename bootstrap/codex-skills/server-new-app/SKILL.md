@@ -22,10 +22,11 @@ This skill applies to servers bootstrapped by this repo.
 3. Create `/srv/stacks/<app>/compose.yaml` with `restart: unless-stopped` and the `edge` network.
 4. Add a Caddy route file in `/srv/stacks/proxy/sites/<nn>-<app>.caddy` that matches the hostname and reverse proxies to the service name and internal port.
 5. Start or update the app with `docker compose -f /srv/stacks/<app>/compose.yaml up -d`.
-6. Reload Caddy with `docker compose -f /srv/stacks/proxy/compose.yaml exec caddy caddy reload --config /etc/caddy/Caddyfile`.
+6. Restart the proxy stack with `docker compose -f /srv/stacks/proxy/compose.yaml restart caddy` so Caddy rereads the mounted route files.
 7. Verify with:
    - `docker compose -f /srv/stacks/<app>/compose.yaml ps`
    - `curl -I https://<hostname>`
+8. If the server uses the managed deploy webhook, register the app as a deploy target so image-push automation can update it later.
 
 ## Compose Pattern
 
@@ -63,6 +64,7 @@ Use the Compose service name as the upstream host on the `edge` network.
 ## Validation
 
 - Confirm the app container is healthy.
-- Confirm Caddy reload succeeds.
+- Confirm the proxy restart succeeds.
 - Confirm the public HTTPS hostname responds through Cloudflare Tunnel.
 - If changing an existing app, check for route conflicts in `/srv/stacks/proxy/sites`.
+- If the managed deploy webhook is enabled, confirm the target exists under `/etc/bootstrap/deploy-hooks` and can be triggered with the local helper from this repo.

@@ -18,6 +18,9 @@ configure_ufw() {
   ufw default deny incoming
   ufw default allow outgoing
   ufw allow in on tailscale0
+  if [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] && [ -n "${DEPLOY_WEBHOOK_TOKEN:-}" ]; then
+    ufw allow from 172.16.0.0/12 to any port 9001 proto tcp
+  fi
   ufw deny 22/tcp
   ufw --force enable
 }

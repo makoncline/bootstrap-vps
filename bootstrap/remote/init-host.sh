@@ -18,7 +18,7 @@ REMOTE_INIT_REBOOT_REQUIRED_EXIT=42
 ensure_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y ca-certificates curl git jq rsync sudo ufw unattended-upgrades zsh zsh-autosuggestions zsh-syntax-highlighting
+  apt-get install -y ca-certificates curl git jq python3 rsync sudo ufw unattended-upgrades zsh zsh-autosuggestions zsh-syntax-highlighting
 }
 
 ensure_system_upgrades() {
@@ -265,6 +265,384 @@ EOF
   rm -rf "$temp_dir"
 }
 
+ensure_deploy_webhook_config() {
+  local temp_dir temp_file
+  install -d -m 750 -o root -g "$ADMIN_USER" /etc/bootstrap /etc/bootstrap/deploy-hooks
+
+  if [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] || [ -n "${DEPLOY_WEBHOOK_TOKEN:-}" ]; then
+    [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] || fail "DEPLOY_WEBHOOK_TOKEN requires DEPLOY_WEBHOOK_HOSTNAME"
+    [ -n "${DEPLOY_WEBHOOK_TOKEN:-}" ] || fail "DEPLOY_WEBHOOK_HOSTNAME requires DEPLOY_WEBHOOK_TOKEN"
+
+    temp_dir=$(mktemp -d)
+    temp_file=$temp_dir/deploy-webhook.env
+    cat >"$temp_file" <<EOF
+DEPLOY_WEBHOOK_HOSTNAME=$DEPLOY_WEBHOOK_HOSTNAME
+DEPLOY_WEBHOOK_TOKEN=$DEPLOY_WEBHOOK_TOKEN
+DEPLOY_WEBHOOK_PORT=9001
+EOF
+    if [ ! -f /etc/bootstrap/deploy-webhook.env ] || ! cmp -s "$temp_file" /etc/bootstrap/deploy-webhook.env; then
+      cat "$temp_file" >/etc/bootstrap/deploy-webhook.env
+    fi
+    chown "root:$ADMIN_USER" /etc/bootstrap/deploy-webhook.env
+    chmod 640 /etc/bootstrap/deploy-webhook.env
+    rm -rf "$temp_dir"
+  else
+    rm -f /etc/bootstrap/deploy-webhook.env
+  fi
+}
+
+ensure_deploy_scripts() {
+  write_if_changed "/usr/local/bin/bootstrap-compose-deploy.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+notify_message() {
+  local message
+  message=$1
+  /usr/local/bin/notify "$message" >/dev/null 2>&1 || true
+}
+
+strip_optional_quotes() {
+  local value
+  value=$1
+  value=${value#\"}
+  value=${value%\"}
+  printf '%s' "$value"
+}
+
+update_image_tag() {
+  local env_file image_tag temp_file
+  env_file=$1
+  image_tag=$2
+  temp_file=$(mktemp)
+  awk -v tag="$image_tag" '
+    BEGIN { updated = 0 }
+    /^IMAGE_TAG=/ {
+      print "IMAGE_TAG=\"" tag "\""
+      updated = 1
+      next
+    }
+    { print }
+    END {
+      if (!updated) {
+        print "IMAGE_TAG=\"" tag "\""
+      }
+    }
+  ' "$env_file" >"$temp_file"
+  cat "$temp_file" >"$env_file"
+  rm -f "$temp_file"
+}
+
+ensure_cache_dir() {
+  local cache_dir cache_uid cache_gid
+  cache_dir=$1
+  cache_uid=$2
+  cache_gid=$3
+  sudo install -d "$cache_dir"
+  sudo chown "$cache_uid:$cache_gid" "$cache_dir"
+}
+
+clear_cache_dir() {
+  local cache_dir
+  cache_dir=$1
+  [ -d "$cache_dir" ] || return 0
+  sudo find "$cache_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+}
+
+smoke_check() {
+  local smoke_url attempts
+  smoke_url=$1
+  [ -n "$smoke_url" ] || return 0
+  attempts=24
+  while [ "$attempts" -gt 0 ]; do
+    if curl --fail --silent --show-error --max-time 20 "$smoke_url" >/dev/null; then
+      return 0
+    fi
+    attempts=$((attempts - 1))
+    sleep 5
+  done
+  return 1
+}
+
+run_compose_update() {
+  local compose_file
+  compose_file=$1
+  docker compose -f "$compose_file" pull
+  docker compose -f "$compose_file" up -d
+}
+
+[ $# -ge 2 ] || fail "Usage: bootstrap-compose-deploy.sh <target> <image-tag> [--clear-cache]"
+
+target=$1
+new_tag=$2
+shift 2
+clear_cache=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --clear-cache) clear_cache=1 ;;
+    *) fail "Unknown argument: $1" ;;
+  esac
+  shift
+done
+
+case "$target" in
+  *[!A-Za-z0-9._-]*|'') fail "Invalid target name: $target" ;;
+esac
+
+target_env="/etc/bootstrap/deploy-hooks/$target.env"
+[ -f "$target_env" ] || fail "Deploy target not found: $target"
+
+set -a
+. "$target_env"
+set +a
+
+deploy_name=${DEPLOY_NAME:-$target}
+stack_dir=${STACK_DIR:-/srv/stacks/$target}
+compose_file=${COMPOSE_FILE:-$stack_dir/compose.yaml}
+stack_env_file=${STACK_ENV_FILE:-$stack_dir/.env}
+smoke_url=${SMOKE_URL:-}
+cache_dir=${CACHE_DIR:-$stack_dir/next-cache}
+cache_uid=${CACHE_UID:-1001}
+cache_gid=${CACHE_GID:-1001}
+auto_rollback=${AUTO_ROLLBACK:-1}
+
+[ -f "$compose_file" ] || fail "Compose file not found: $compose_file"
+[ -f "$stack_env_file" ] || fail "Stack env file not found: $stack_env_file"
+
+state_dir="$HOME/.local/state/bootstrap-deploy"
+mkdir -p "$state_dir"
+lock_file="$state_dir/$target.lock"
+exec 9>"$lock_file"
+if ! flock -n 9; then
+  printf 'deploy already in progress for %s\n' "$target" >&2
+  exit 3
+fi
+
+set -a
+. "$stack_env_file"
+set +a
+previous_tag=$(strip_optional_quotes "${IMAGE_TAG:-}")
+[ -n "$previous_tag" ] || fail "IMAGE_TAG is missing in $stack_env_file"
+
+ensure_cache_dir "$cache_dir" "$cache_uid" "$cache_gid"
+if [ "$clear_cache" = "1" ]; then
+  clear_cache_dir "$cache_dir"
+fi
+
+deploy_failed=0
+rollback_status="not attempted"
+
+update_image_tag "$stack_env_file" "$new_tag"
+if ! run_compose_update "$compose_file" || ! smoke_check "$smoke_url"; then
+  deploy_failed=1
+fi
+
+if [ "$deploy_failed" = "0" ]; then
+  notify_message "${deploy_name} deploy successful
+previous image tag: ${previous_tag}
+new image tag: ${new_tag}
+url: ${smoke_url:-n/a}"
+  exit 0
+fi
+
+if [ "$auto_rollback" = "1" ] && [ "$previous_tag" != "$new_tag" ]; then
+  update_image_tag "$stack_env_file" "$previous_tag"
+  if run_compose_update "$compose_file" && smoke_check "$smoke_url"; then
+    rollback_status="successful"
+  else
+    rollback_status="failed"
+  fi
+else
+  rollback_status="disabled"
+fi
+
+notify_message "${deploy_name} deploy failed
+previous image tag: ${previous_tag}
+attempted image tag: ${new_tag}
+rollback: ${rollback_status}
+url: ${smoke_url:-n/a}"
+exit 1
+EOF
+  chmod 755 /usr/local/bin/bootstrap-compose-deploy.sh
+
+  write_if_changed "/usr/local/bin/bootstrap-deploy-webhook.py" <<'EOF'
+#!/usr/bin/env python3
+import json
+import re
+import subprocess
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+CONFIG_PATH = "/etc/bootstrap/deploy-webhook.env"
+TARGET_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+IMAGE_TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def load_env(path):
+    env = {}
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            env[key] = value.strip().strip('"')
+    return env
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "BootstrapDeployWebhook/1.0"
+
+    def _json(self, status, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _authorized(self):
+        token = self.server.deploy_token
+        auth = self.headers.get("Authorization", "")
+        header_token = self.headers.get("X-Deploy-Token", "")
+        return auth == f"Bearer {token}" or header_token == token
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            self._json(200, {"ok": True})
+            return
+        self._json(404, {"ok": False, "error": "not found"})
+
+    def do_POST(self):
+        if not self._authorized():
+            self._json(401, {"ok": False, "error": "unauthorized"})
+            return
+
+        if not self.path.startswith("/deploy/"):
+            self._json(404, {"ok": False, "error": "not found"})
+            return
+
+        target = self.path.removeprefix("/deploy/")
+        if not TARGET_RE.fullmatch(target):
+            self._json(400, {"ok": False, "error": "invalid target"})
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._json(400, {"ok": False, "error": "invalid content length"})
+            return
+
+        if length <= 0 or length > 16384:
+            self._json(400, {"ok": False, "error": "invalid request body"})
+            return
+
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except json.JSONDecodeError:
+            self._json(400, {"ok": False, "error": "invalid json"})
+            return
+
+        image_tag = payload.get("image_tag")
+        clear_cache = bool(payload.get("clear_cache", False))
+        if not isinstance(image_tag, str) or not IMAGE_TAG_RE.fullmatch(image_tag):
+            self._json(400, {"ok": False, "error": "invalid image_tag"})
+            return
+
+        command = ["/usr/local/bin/bootstrap-compose-deploy.sh", target, image_tag]
+        if clear_cache:
+            command.append("--clear-cache")
+
+        completed = subprocess.run(command, capture_output=True, text=True)
+        if completed.returncode == 0:
+            self._json(200, {"ok": True, "target": target, "image_tag": image_tag})
+            return
+        if completed.returncode == 3:
+            self._json(409, {"ok": False, "error": completed.stderr.strip() or "deploy in progress"})
+            return
+
+        self._json(
+            500,
+            {
+                "ok": False,
+                "error": completed.stderr.strip() or "deploy failed",
+                "target": target,
+                "image_tag": image_tag,
+            },
+        )
+
+    def log_message(self, fmt, *args):
+        sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
+
+
+def main():
+    config = load_env(CONFIG_PATH)
+    port = int(config.get("DEPLOY_WEBHOOK_PORT", "9001"))
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    server.deploy_token = config["DEPLOY_WEBHOOK_TOKEN"]
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
+EOF
+  chmod 755 /usr/local/bin/bootstrap-deploy-webhook.py
+}
+
+ensure_deploy_webhook_service() {
+  write_if_changed "/etc/systemd/system/bootstrap-deploy-webhook.service" <<EOF
+[Unit]
+Description=Bootstrap deploy webhook
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$ADMIN_USER
+Group=$ADMIN_USER
+ExecStart=/usr/local/bin/bootstrap-deploy-webhook.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+
+  if [ -f /etc/bootstrap/deploy-webhook.env ]; then
+    systemctl enable --now bootstrap-deploy-webhook.service
+  else
+    systemctl disable --now bootstrap-deploy-webhook.service 2>/dev/null || true
+  fi
+}
+
+ensure_internal_firewall_rules() {
+  if ! command -v ufw >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ! ufw status 2>/dev/null | grep -q '^Status: active'; then
+    return 0
+  fi
+
+  ufw delete allow in on docker0 to any port 9001 proto tcp >/dev/null 2>&1 || true
+
+  if [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] && [ -n "${DEPLOY_WEBHOOK_TOKEN:-}" ]; then
+    if ! ufw status | grep -Fq '172.16.0.0/12'; then
+      ufw allow from 172.16.0.0/12 to any port 9001 proto tcp >/dev/null
+    fi
+  else
+    ufw delete allow from 172.16.0.0/12 to any port 9001 proto tcp >/dev/null 2>&1 || true
+  fi
+}
+
 ensure_healthcheck_scripts() {
   write_if_changed "/usr/local/bin/bootstrap-alert.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -358,6 +736,12 @@ if ! docker compose -f /srv/stacks/tunnel/compose.yaml ps --status running --ser
   append_failure "tunnel stack is not healthy"
 fi
 
+if [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] && [ -n "${DEPLOY_WEBHOOK_TOKEN:-}" ]; then
+  if ! systemctl is-active --quiet bootstrap-deploy-webhook; then
+    append_failure "deploy webhook service is not active"
+  fi
+fi
+
 if ! curl --fail --silent --show-error --max-time 20 "https://${SMOKE_HOSTNAME}" >/dev/null; then
   append_failure "smoke check failed for https://${SMOKE_HOSTNAME}"
 fi
@@ -433,6 +817,8 @@ services:
       edge:
         aliases:
           - caddy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./sites:/etc/caddy/sites:ro
@@ -466,6 +852,17 @@ handle @whoami {
   reverse_proxy whoami:80
 }
 EOF
+
+  if [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ]; then
+    write_if_changed "/srv/stacks/proxy/sites/05-deploy-webhook.caddy" <<EOF
+@deploy_webhook host $DEPLOY_WEBHOOK_HOSTNAME
+handle @deploy_webhook {
+  reverse_proxy host.docker.internal:9001
+}
+EOF
+  else
+    rm -f /srv/stacks/proxy/sites/05-deploy-webhook.caddy
+  fi
 }
 
 ensure_tunnel_stack() {
@@ -576,6 +973,10 @@ log "Starting Docker stacks"
 start_stacks
 log "Installing monitoring scripts and timer"
 ensure_monitoring_config
+ensure_deploy_webhook_config
+ensure_deploy_scripts
+ensure_deploy_webhook_service
+ensure_internal_firewall_rules
 ensure_healthcheck_scripts
 ensure_healthcheck_timer
 log "Initial host bootstrap complete"
