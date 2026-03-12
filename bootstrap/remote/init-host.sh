@@ -267,7 +267,7 @@ EOF
 
 ensure_deploy_webhook_config() {
   local temp_dir temp_file
-  install -d -m 750 -o root -g "$ADMIN_USER" /etc/bootstrap /etc/bootstrap/deploy-hooks
+  install -d -m 750 -o root -g "$ADMIN_USER" /etc/bootstrap /etc/bootstrap/deploy-hooks /etc/bootstrap/config-sync
 
   if [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] || [ -n "${DEPLOY_WEBHOOK_TOKEN:-}" ]; then
     [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] || fail "DEPLOY_WEBHOOK_TOKEN requires DEPLOY_WEBHOOK_HOSTNAME"
@@ -307,12 +307,24 @@ notify_message() {
   /usr/local/bin/notify "$message" >/dev/null 2>&1 || true
 }
 
+schedule_proxy_restart() {
+  nohup bash -lc 'sleep 2; docker compose -f /srv/stacks/proxy/compose.yaml restart caddy >/dev/null 2>&1' >/dev/null 2>&1 &
+}
+
 strip_optional_quotes() {
   local value
   value=$1
   value=${value#\"}
   value=${value%\"}
   printf '%s' "$value"
+}
+
+read_image_tag() {
+  local env_file line
+  env_file=$1
+  line=$(grep '^IMAGE_TAG=' "$env_file" | tail -1 || true)
+  [ -n "$line" ] || return 1
+  strip_optional_quotes "${line#IMAGE_TAG=}"
 }
 
 update_image_tag() {
@@ -370,10 +382,15 @@ smoke_check() {
 }
 
 run_compose_update() {
-  local compose_file
+  local compose_file stack_dir stack_env_file
   compose_file=$1
-  docker compose -f "$compose_file" pull
-  docker compose -f "$compose_file" up -d
+  stack_dir=$2
+  stack_env_file=$3
+  (
+    cd "$stack_dir"
+    env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" pull
+    env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" up -d
+  )
 }
 
 [ $# -ge 2 ] || fail "Usage: bootstrap-compose-deploy.sh <target> <image-tag> [--clear-cache]"
@@ -424,10 +441,7 @@ if ! flock -n 9; then
   exit 3
 fi
 
-set -a
-. "$stack_env_file"
-set +a
-previous_tag=$(strip_optional_quotes "${IMAGE_TAG:-}")
+previous_tag=$(read_image_tag "$stack_env_file")
 [ -n "$previous_tag" ] || fail "IMAGE_TAG is missing in $stack_env_file"
 
 ensure_cache_dir "$cache_dir" "$cache_uid" "$cache_gid"
@@ -439,7 +453,7 @@ deploy_failed=0
 rollback_status="not attempted"
 
 update_image_tag "$stack_env_file" "$new_tag"
-if ! run_compose_update "$compose_file" || ! smoke_check "$smoke_url"; then
+if ! run_compose_update "$compose_file" "$stack_dir" "$stack_env_file" || ! smoke_check "$smoke_url"; then
   deploy_failed=1
 fi
 
@@ -453,7 +467,7 @@ fi
 
 if [ "$auto_rollback" = "1" ] && [ "$previous_tag" != "$new_tag" ]; then
   update_image_tag "$stack_env_file" "$previous_tag"
-  if run_compose_update "$compose_file" && smoke_check "$smoke_url"; then
+  if run_compose_update "$compose_file" "$stack_dir" "$stack_env_file" && smoke_check "$smoke_url"; then
     rollback_status="successful"
   else
     rollback_status="failed"
@@ -470,6 +484,161 @@ url: ${smoke_url:-n/a}"
 exit 1
 EOF
   chmod 755 /usr/local/bin/bootstrap-compose-deploy.sh
+
+  write_if_changed "/usr/local/bin/bootstrap-sync-config.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+notify_message() {
+  local message
+  message=$1
+  /usr/local/bin/notify "$message" >/dev/null 2>&1 || true
+}
+
+copy_if_changed() {
+  local source target
+  source=$1
+  target=$2
+  if [ -f "$target" ] && cmp -s "$source" "$target"; then
+    return 1
+  fi
+  install -d "$(dirname "$target")"
+  cat "$source" >"$target"
+  return 0
+}
+
+smoke_check() {
+  local smoke_url attempts
+  smoke_url=$1
+  [ -n "$smoke_url" ] || return 0
+  attempts=24
+  while [ "$attempts" -gt 0 ]; do
+    if curl --fail --silent --show-error --max-time 20 "$smoke_url" >/dev/null; then
+      return 0
+    fi
+    attempts=$((attempts - 1))
+    sleep 5
+  done
+  return 1
+}
+
+run_compose_apply() {
+  local stack_dir compose_dest stack_env_file
+  stack_dir=$1
+  compose_dest=$2
+  stack_env_file=$3
+  (
+    cd "$stack_dir"
+    env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_dest" up -d
+  )
+}
+
+fetch_repo_ref() {
+  local checkout_dir repo_url config_subdir git_ref
+  checkout_dir=$1
+  repo_url=$2
+  config_subdir=$3
+  git_ref=$4
+
+  if [ ! -d "$checkout_dir/.git" ]; then
+    install -d "$(dirname "$checkout_dir")"
+    git clone --filter=blob:none --no-checkout "$repo_url" "$checkout_dir" >/dev/null 2>&1
+    git -C "$checkout_dir" sparse-checkout init --cone >/dev/null 2>&1
+    git -C "$checkout_dir" sparse-checkout set "$config_subdir" >/dev/null 2>&1
+  fi
+
+  git -C "$checkout_dir" fetch --depth 1 origin "$git_ref" >/dev/null 2>&1
+  git -C "$checkout_dir" checkout --detach FETCH_HEAD >/dev/null 2>&1
+}
+
+[ $# -eq 2 ] || fail "Usage: bootstrap-sync-config.sh <target> <git-ref>"
+
+target=$1
+git_ref=$2
+
+case "$target" in
+  *[!A-Za-z0-9._-]*|'') fail "Invalid target name: $target" ;;
+esac
+case "$git_ref" in
+  *[!A-Za-z0-9._/-]*|'') fail "Invalid git ref: $git_ref" ;;
+esac
+
+target_env="/etc/bootstrap/config-sync/$target.env"
+[ -f "$target_env" ] || fail "Config-sync target not found: $target"
+
+set -a
+. "$target_env"
+set +a
+
+sync_name=${SYNC_NAME:-$target}
+repo_url=${REPO_URL:-}
+config_subdir=${CONFIG_SUBDIR:-deploy/vps}
+stack_dir=${STACK_DIR:-/srv/stacks/$target}
+compose_dest=${COMPOSE_DEST:-$stack_dir/compose.yaml}
+route_dest=${ROUTE_DEST:-/srv/stacks/proxy/sites/20-$target.caddy}
+stack_env_file=${STACK_ENV_FILE:-$stack_dir/.env}
+checkout_dir=${CHECKOUT_DIR:-/var/lib/bootstrap-config-sync/$target}
+smoke_url=${SMOKE_URL:-}
+
+[ -n "$repo_url" ] || fail "REPO_URL is missing in $target_env"
+[ -f "$stack_env_file" ] || fail "Stack env file not found: $stack_env_file"
+
+state_dir="$HOME/.local/state/bootstrap-config-sync"
+mkdir -p "$state_dir"
+lock_file="$state_dir/$target.lock"
+exec 9>"$lock_file"
+if ! flock -n 9; then
+  printf 'config sync already in progress for %s\n' "$target" >&2
+  exit 3
+fi
+
+fetch_repo_ref "$checkout_dir" "$repo_url" "$config_subdir" "$git_ref"
+
+source_dir="$checkout_dir/$config_subdir"
+compose_src="$source_dir/compose.yaml"
+route_src="$source_dir/caddy-route.caddy"
+
+[ -f "$compose_src" ] || fail "Missing compose.yaml in $source_dir"
+[ -f "$route_src" ] || fail "Missing caddy-route.caddy in $source_dir"
+
+compose_changed=0
+route_changed=0
+if copy_if_changed "$compose_src" "$compose_dest"; then
+  compose_changed=1
+fi
+if copy_if_changed "$route_src" "$route_dest"; then
+  route_changed=1
+fi
+
+if [ "$compose_changed" = "1" ]; then
+  run_compose_apply "$stack_dir" "$compose_dest" "$stack_env_file"
+fi
+
+if ! smoke_check "$smoke_url"; then
+  notify_message "${sync_name} config sync failed
+git ref: ${git_ref}
+compose changed: ${compose_changed}
+route changed: ${route_changed}
+url: ${smoke_url:-n/a}"
+  exit 1
+fi
+
+notify_message "${sync_name} config sync successful
+git ref: ${git_ref}
+compose changed: ${compose_changed}
+route changed: ${route_changed}
+url: ${smoke_url:-n/a}"
+
+if [ "$route_changed" = "1" ]; then
+  schedule_proxy_restart
+fi
+EOF
+  chmod 755 /usr/local/bin/bootstrap-sync-config.sh
 
   write_if_changed "/usr/local/bin/bootstrap-deploy-webhook.py" <<'EOF'
 #!/usr/bin/env python3
@@ -505,7 +674,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass
 
     def _authorized(self):
         token = self.server.deploy_token
@@ -525,13 +697,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if not self.path.startswith("/deploy/"):
-            self._json(404, {"ok": False, "error": "not found"})
-            return
-
-        target = self.path.removeprefix("/deploy/")
-        if not TARGET_RE.fullmatch(target):
-            self._json(400, {"ok": False, "error": "invalid target"})
-            return
+            pass
 
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -549,22 +715,49 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": "invalid json"})
             return
 
-        image_tag = payload.get("image_tag")
-        clear_cache = bool(payload.get("clear_cache", False))
-        if not isinstance(image_tag, str) or not IMAGE_TAG_RE.fullmatch(image_tag):
-            self._json(400, {"ok": False, "error": "invalid image_tag"})
-            return
+        command = None
+        response_payload = {}
+        target = None
 
-        command = ["/usr/local/bin/bootstrap-compose-deploy.sh", target, image_tag]
-        if clear_cache:
-            command.append("--clear-cache")
+        if self.path.startswith("/deploy/"):
+            target = self.path.removeprefix("/deploy/")
+            if not TARGET_RE.fullmatch(target):
+                self._json(400, {"ok": False, "error": "invalid target"})
+                return
+
+            image_tag = payload.get("image_tag")
+            clear_cache = bool(payload.get("clear_cache", False))
+            if not isinstance(image_tag, str) or not IMAGE_TAG_RE.fullmatch(image_tag):
+                self._json(400, {"ok": False, "error": "invalid image_tag"})
+                return
+
+            command = ["/usr/local/bin/bootstrap-compose-deploy.sh", target, image_tag]
+            if clear_cache:
+                command.append("--clear-cache")
+            response_payload = {"target": target, "image_tag": image_tag}
+        elif self.path.startswith("/sync-config/"):
+            target = self.path.removeprefix("/sync-config/")
+            if not TARGET_RE.fullmatch(target):
+                self._json(400, {"ok": False, "error": "invalid target"})
+                return
+
+            git_ref = payload.get("git_ref")
+            if not isinstance(git_ref, str) or not git_ref:
+                self._json(400, {"ok": False, "error": "invalid git_ref"})
+                return
+
+            command = ["/usr/local/bin/bootstrap-sync-config.sh", target, git_ref]
+            response_payload = {"target": target, "git_ref": git_ref}
+        else:
+            self._json(404, {"ok": False, "error": "not found"})
+            return
 
         completed = subprocess.run(command, capture_output=True, text=True)
         if completed.returncode == 0:
-            self._json(200, {"ok": True, "target": target, "image_tag": image_tag})
+            self._json(200, {"ok": True, **response_payload})
             return
         if completed.returncode == 3:
-            self._json(409, {"ok": False, "error": completed.stderr.strip() or "deploy in progress"})
+            self._json(409, {"ok": False, "error": completed.stderr.strip() or "action in progress"})
             return
 
         self._json(
@@ -572,8 +765,7 @@ class Handler(BaseHTTPRequestHandler):
             {
                 "ok": False,
                 "error": completed.stderr.strip() or "deploy failed",
-                "target": target,
-                "image_tag": image_tag,
+                **response_payload,
             },
         )
 
@@ -618,6 +810,7 @@ EOF
 
   if [ -f /etc/bootstrap/deploy-webhook.env ]; then
     systemctl enable --now bootstrap-deploy-webhook.service
+    systemctl restart bootstrap-deploy-webhook.service
   else
     systemctl disable --now bootstrap-deploy-webhook.service 2>/dev/null || true
   fi
@@ -804,6 +997,7 @@ EOF
 
 ensure_stack_layout() {
   install -d -m 755 /srv/stacks/proxy/sites /srv/stacks/tunnel /srv/stacks/whoami
+  install -d -m 755 -o "$ADMIN_USER" -g "$ADMIN_USER" /var/lib/bootstrap-config-sync
   chown -R "$ADMIN_USER:$ADMIN_USER" /srv/stacks
 }
 

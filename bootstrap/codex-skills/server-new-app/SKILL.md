@@ -27,6 +27,7 @@ This skill applies to servers bootstrapped by this repo.
    - `docker compose -f /srv/stacks/<app>/compose.yaml ps`
    - `curl -I https://<hostname>`
 8. If the server uses the managed deploy webhook, register the app as a deploy target so image-push automation can update it later.
+9. If the app repo keeps committed stack files such as `deploy/vps/compose.yaml`, also register a config-sync target so repo-owned stack changes can be pulled onto the server by commit SHA.
 
 ## Compose Pattern
 
@@ -68,3 +69,4 @@ Use the Compose service name as the upstream host on the `edge` network.
 - Confirm the public HTTPS hostname responds through Cloudflare Tunnel.
 - If changing an existing app, check for route conflicts in `/srv/stacks/proxy/sites`.
 - If the managed deploy webhook is enabled, confirm the target exists under `/etc/bootstrap/deploy-hooks` and can be triggered with the local helper from this repo.
+- If the app uses config sync, confirm the target exists under `/etc/bootstrap/config-sync` and the config-sync webhook can fetch the app repo at a specific commit SHA.

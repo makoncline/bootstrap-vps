@@ -44,12 +44,22 @@ scp_cmd() {
     "$@"
 }
 
+tar_bundle_to_file() {
+  local bundle
+  bundle=$1
+  if [ "$(uname -s)" = "Darwin" ]; then
+    COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata --disable-copyfile --no-xattrs -C "$REPO_ROOT/bootstrap" -czf "$bundle" remote lib codex-skills codex-home
+  else
+    tar -C "$REPO_ROOT/bootstrap" -czf "$bundle" remote lib codex-skills codex-home
+  fi
+}
+
 copy_bundle() {
   local bundle
   bundle=$1
   log "Copying remote bundle to $PUBLIC_SSH_TARGET"
   ssh_cmd "root@$PUBLIC_SSH_TARGET" "rm -rf '$REMOTE_DIR' && mkdir -p '$REMOTE_DIR'"
-  COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar -C "$REPO_ROOT/bootstrap" -czf "$bundle" remote lib codex-skills codex-home
+  tar_bundle_to_file "$bundle"
   cat "$bundle" | ssh_cmd "root@$PUBLIC_SSH_TARGET" "tar -xzf - -C '$REMOTE_DIR'"
   scp_cmd "$RUNTIME_ENV_FILE" "root@$PUBLIC_SSH_TARGET:$REMOTE_DIR/host.env"
 }

@@ -33,9 +33,17 @@ ssh_cmd() {
     "$target" "$@"
 }
 
+tar_bundle_to_stdout() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata --disable-copyfile --no-xattrs -C "$REPO_ROOT/bootstrap" -czf - remote lib codex-skills codex-home
+  else
+    tar -C "$REPO_ROOT/bootstrap" -czf - remote lib codex-skills codex-home
+  fi
+}
+
 copy_bundle() {
   log "Copying remote bundle to $ADMIN_USER@$TAILSCALE_HOSTNAME"
-  COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar -C "$REPO_ROOT/bootstrap" -czf - remote lib codex-skills codex-home | \
+  tar_bundle_to_stdout | \
     ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "rm -rf '$REMOTE_DIR' && mkdir -p '$REMOTE_DIR' && tar -xzf - -C '$REMOTE_DIR'"
   cat "$RUNTIME_ENV_FILE" | ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "cat > '$REMOTE_DIR/host.env'"
 }

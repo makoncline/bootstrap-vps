@@ -8,11 +8,13 @@ This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the ex
 - `bootstrap/hosts/.env.production`: ignored working copy for the server you are bootstrapping.
 - `bootstrap/local/bootstrap-host.sh`: main entrypoint from this Mac.
 - `bootstrap/local/reconcile-host.sh`: reruns the idempotent remote converger on an existing host over Tailscale SSH.
+- `bootstrap/local/configure-config-sync.sh`: registers a named config-sync target for the managed webhook on an existing host.
 - `bootstrap/local/configure-deploy-target.sh`: registers a named deploy target for the managed webhook on an existing host.
 - `bootstrap/local/restart-proxy.sh`: restarts the managed Caddy proxy stack on an existing host so new route files take effect.
 - `bootstrap/local/cloudflare-tunnel.sh`: syncs remote-managed tunnel ingress and DNS routes through the Cloudflare API.
 - `bootstrap/local/codex-login.sh`: opens an interactive Codex login session over Tailscale SSH on the server.
 - `bootstrap/local/test-deploy-webhook.sh`: calls the managed deploy webhook for a named target and image tag.
+- `bootstrap/local/test-config-sync-webhook.sh`: calls the managed config-sync webhook for a named target and git ref.
 - `bootstrap/local/sync-local-codex-home.sh`: syncs repo-managed global Codex defaults, including `AGENTS.md` and `machine-notes.md`, onto this machine.
 - `bootstrap/local/test-telegram-alert.sh`: sends a Telegram test message through the server's alert script.
 - `bootstrap/local/sync-local-codex-skills.sh`: syncs repo-managed Codex skills into this machine's global Codex skills directory.
@@ -135,10 +137,22 @@ To register a deploy target for an app stack:
 ./bootstrap/local/configure-deploy-target.sh bootstrap/hosts/.env.production daylilycatalog /srv/stacks/daylilycatalog https://vps-test.daylilycatalog.com
 ```
 
+To register a config-sync target for app-owned stack files:
+
+```bash
+./bootstrap/local/configure-config-sync.sh bootstrap/hosts/.env.production daylilycatalog https://github.com/makoncline/new-daylily-catalog.git deploy/vps /srv/stacks/daylilycatalog https://vps-test.daylilycatalog.com
+```
+
 To test the managed deploy webhook once a target exists:
 
 ```bash
 ./bootstrap/local/test-deploy-webhook.sh bootstrap/hosts/.env.production daylilycatalog main-deadbeef
+```
+
+To test the managed config-sync webhook once a target exists:
+
+```bash
+./bootstrap/local/test-config-sync-webhook.sh bootstrap/hosts/.env.production daylilycatalog <git-sha>
 ```
 
 The webhook accepts `POST https://<DEPLOY_WEBHOOK_HOSTNAME>/deploy/<target>` with:
@@ -147,6 +161,13 @@ The webhook accepts `POST https://<DEPLOY_WEBHOOK_HOSTNAME>/deploy/<target>` wit
 - JSON body like `{"image_tag":"main-deadbeef","clear_cache":false}`
 
 The host-side deploy runner updates `IMAGE_TAG`, runs `docker compose pull && docker compose up -d`, smoke-checks the configured URL, and sends Telegram notifications that include the previous image tag, attempted image tag, and rollback status.
+
+The same service also accepts `POST https://<DEPLOY_WEBHOOK_HOSTNAME>/sync-config/<target>` with:
+
+- `Authorization: Bearer <DEPLOY_WEBHOOK_TOKEN>`
+- JSON body like `{"git_ref":"<commit-sha>"}`.
+
+For config sync, the server keeps a dedicated checkout under `/var/lib/bootstrap-config-sync/<target>`, fetches that exact ref, copies the configured app-owned files into the live stack locations, restarts the shared proxy if the route changed, reapplies the app stack if the Compose file changed, and leaves the live `.env` untouched.
 
 When you add or update route files under `/srv/stacks/proxy/sites`, apply them by restarting the managed Caddy container instead of using `caddy reload`:
 
