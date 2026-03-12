@@ -10,6 +10,7 @@ Bootstrap for a fresh Hetzner Ubuntu 24.04 VPS using:
 - a lightweight healthcheck timer with optional Telegram alerts
 - an optional authenticated deploy webhook for app repos
 - a minimal interactive `zsh` setup for the admin user
+- Cursor remote terminal sandbox support for Ubuntu/AppArmor hosts
 - Codex CLI plus repo-managed skills on the server
 
 ## What it does
@@ -44,6 +45,8 @@ When you add or change Caddy route files under `/srv/stacks/proxy/sites` on the 
 If you enable `DEPLOY_WEBHOOK_HOSTNAME` and `DEPLOY_WEBHOOK_TOKEN` in [`bootstrap/hosts/.env.example`](/Users/makon/dev/servers/bootstrap/hosts/.env.example), bootstrap will also install a small authenticated deploy webhook on the server. App repos can call it after a successful image push.
 
 That same webhook now also supports config sync from an app repo commit SHA into the live stack files, using a dedicated server-side checkout under `/var/lib/bootstrap-config-sync/<target>` instead of `git pull` inside `/srv/stacks`.
+
+Bootstrap also installs Cursor's Ubuntu AppArmor package for remote terminals and patches the shipped profile with the extra `netlink raw` permission Cursor currently needs on Ubuntu 24.04, so Cursor remote terminals can start on future VPSes without a manual server-side fix.
 
 Manual one-time server setup that is not part of bootstrap:
 

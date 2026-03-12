@@ -77,6 +77,7 @@ To apply updated bootstrap logic to an already-bootstrapped host over Tailscale:
 - Docker Engine and the Compose plugin are installed and enabled.
 - Docker uses local log rotation with `max-size=10m` and `max-file=3`.
 - Node.js, npm, and Codex CLI are installed on the server.
+- Cursor's `cursor-sandbox-apparmor` package is installed and its remote profile is patched with `network netlink raw` so Cursor remote terminals work on Ubuntu 24.04 AppArmor hosts.
 - repo-managed global Codex defaults are installed under `~/.codex/AGENTS.md` and `~/.codex/memories/machine-notes.md`.
 - Repo-managed Codex skills are installed under `~/.codex/skills`.
 - `/srv/stacks/proxy` runs internal-only Caddy on the shared `edge` network.

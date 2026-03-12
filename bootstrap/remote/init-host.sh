@@ -200,6 +200,41 @@ ensure_codex_cli() {
   fi
 }
 
+ensure_cursor_remote_sandbox() {
+  local package_name package_version package_url temp_dir package_file
+  package_name=cursor-sandbox-apparmor
+  package_version=0.4.0
+  package_url="https://downloads.cursor.com/lab/enterprise/${package_name}_${package_version}_all.deb"
+
+  if ! dpkg-query -W -f='${Status} ${Version}\n' "$package_name" 2>/dev/null | grep -Fq "install ok installed ${package_version}"; then
+    temp_dir=$(mktemp -d)
+    package_file="$temp_dir/${package_name}.deb"
+    curl -fsSL "$package_url" -o "$package_file"
+    export DEBIAN_FRONTEND=noninteractive
+    dpkg -i "$package_file"
+    rm -rf "$temp_dir"
+  fi
+
+  python3 - <<'PY'
+from pathlib import Path
+
+path = Path("/etc/apparmor.d/cursor-sandbox-remote")
+needle = "  network netlink raw,\n"
+anchor = "  capability setpcap,\n"
+
+if path.exists():
+    text = path.read_text()
+    if needle not in text:
+        if anchor not in text:
+            raise SystemExit(f"Missing anchor in {path}")
+        path.write_text(text.replace(anchor, anchor + "\n" + needle))
+PY
+
+  if [ -f /etc/apparmor.d/cursor-sandbox-remote ]; then
+    apparmor_parser -r /etc/apparmor.d/cursor-sandbox-remote
+  fi
+}
+
 ensure_codex_skills() {
   local source_dir target_dir
   source_dir=$SCRIPT_DIR/../codex-skills
@@ -1153,6 +1188,8 @@ log "Installing Tailscale"
 ensure_tailscale
 log "Installing Codex CLI"
 ensure_codex_cli
+log "Configuring Cursor remote sandbox support"
+ensure_cursor_remote_sandbox
 log "Installing Codex home defaults"
 ensure_codex_home_files
 log "Installing Codex skills"

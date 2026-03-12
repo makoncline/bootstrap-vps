@@ -15,6 +15,7 @@ Use this when you need to manually walk a fresh Hetzner Ubuntu 24.04 server thro
 11. If Telegram credentials were provided, run `notify "[<HOSTNAME>] telegram test"` as the admin user and confirm the message arrives.
 12. If the server needs GitHub access, generate a dedicated SSH key, add it to GitHub, and verify `ssh -T git@github.com`.
 13. Confirm public SSH to the server IP fails, `docker compose version` works on the server, `tailscale status` is healthy, `codex --version` works, and `https://<SMOKE_HOSTNAME>` serves the sample `whoami` app through the tunnel.
-14. For later app deploys, remember that changes under `/srv/stacks/proxy/sites` take effect by restarting the proxy container, not by calling `caddy reload`, because the managed Caddy config sets `admin off`.
-15. If deploy webhook credentials were provided, confirm `systemctl status bootstrap-deploy-webhook` is healthy and `GET https://<DEPLOY_WEBHOOK_HOSTNAME>/healthz` returns success through the tunnel.
-16. If a config-sync target is configured for an app, confirm the server can fetch the app repo at a specific commit SHA into `/var/lib/bootstrap-config-sync/<target>` and apply `deploy/vps/` without overwriting the live stack `.env`.
+14. If you will use Cursor against the server, confirm `dpkg -s cursor-sandbox-apparmor` succeeds and `grep -q 'network netlink raw' /etc/apparmor.d/cursor-sandbox-remote` so Cursor remote terminals can start under Ubuntu 24.04 AppArmor.
+15. For later app deploys, remember that changes under `/srv/stacks/proxy/sites` take effect by restarting the proxy container, not by calling `caddy reload`, because the managed Caddy config sets `admin off`.
+16. If deploy webhook credentials were provided, confirm `systemctl status bootstrap-deploy-webhook` is healthy and `GET https://<DEPLOY_WEBHOOK_HOSTNAME>/healthz` returns success through the tunnel.
+17. If a config-sync target is configured for an app, confirm the server can fetch the app repo at a specific commit SHA into `/var/lib/bootstrap-config-sync/<target>` and apply `deploy/vps/` without overwriting the live stack `.env`.
