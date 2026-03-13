@@ -261,6 +261,38 @@ ensure_codex_home_files() {
   if [ -f "$source_dir/memories/machine-notes.md" ] && [ ! -f "$target_dir/memories/machine-notes.md" ]; then
     install -o "$ADMIN_USER" -g "$ADMIN_USER" -m 644 "$source_dir/memories/machine-notes.md" "$target_dir/memories/machine-notes.md"
   fi
+
+  if [ -f "$source_dir/config.toml" ] && [ ! -f "$target_dir/config.toml" ]; then
+    install -o "$ADMIN_USER" -g "$ADMIN_USER" -m 644 "$source_dir/config.toml" "$target_dir/config.toml"
+  fi
+}
+
+ensure_swapfile() {
+  local swapfile size_mb
+  swapfile=/swapfile
+  size_mb=1024
+
+  if ! grep -qs "^$swapfile " /proc/swaps; then
+    if [ ! -f "$swapfile" ]; then
+      if command -v fallocate >/dev/null 2>&1; then
+        fallocate -l "${size_mb}M" "$swapfile"
+      else
+        dd if=/dev/zero of="$swapfile" bs=1M count="$size_mb" status=none
+      fi
+      chmod 600 "$swapfile"
+      mkswap "$swapfile" >/dev/null
+    fi
+    swapon "$swapfile"
+  fi
+
+  if ! grep -Fq "$swapfile none swap sw 0 0" /etc/fstab; then
+    printf '%s\n' "$swapfile none swap sw 0 0" >>/etc/fstab
+  fi
+
+  write_if_changed "/etc/sysctl.d/60-bootstrap-swap.conf" <<'EOF'
+vm.swappiness = 10
+EOF
+  sysctl --load /etc/sysctl.d/60-bootstrap-swap.conf >/dev/null
 }
 
 ensure_unattended_upgrades() {
@@ -327,6 +359,108 @@ EOF
 }
 
 ensure_deploy_scripts() {
+  write_if_changed "/usr/local/bin/bootstrap-prune-images.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+strip_optional_quotes() {
+  local value
+  value=$1
+  value=${value#\"}
+  value=${value%\"}
+  printf '%s' "$value"
+}
+
+read_image_tag() {
+  local env_file line
+  env_file=$1
+  line=$(grep '^IMAGE_TAG=' "$env_file" | tail -1 || true)
+  [ -n "$line" ] || return 1
+  strip_optional_quotes "${line#IMAGE_TAG=}"
+}
+
+[ $# -ge 1 ] || fail "Usage: bootstrap-prune-images.sh <target> [keep-count]"
+
+target=$1
+keep_count_override=${2:-}
+
+case "$target" in
+  *[!A-Za-z0-9._-]*|'') fail "Invalid target name: $target" ;;
+esac
+
+target_env="/etc/bootstrap/deploy-hooks/$target.env"
+[ -f "$target_env" ] || fail "Deploy target not found: $target"
+
+set -a
+. "$target_env"
+set +a
+
+stack_dir=${STACK_DIR:-/srv/stacks/$target}
+stack_env_file=${STACK_ENV_FILE:-$stack_dir/.env}
+image_repository=${IMAGE_REPOSITORY:-}
+keep_count=${keep_count_override:-${KEEP_IMAGE_COUNT:-0}}
+
+[ -n "$image_repository" ] || fail "IMAGE_REPOSITORY is missing in $target_env"
+[ -f "$stack_env_file" ] || fail "Stack env file not found: $stack_env_file"
+case "$keep_count" in
+  ''|*[!0-9]*) fail "keep-count must be a positive integer" ;;
+esac
+[ "$keep_count" -ge 1 ] || fail "keep-count must be at least 1"
+
+current_tag=$(read_image_tag "$stack_env_file")
+[ -n "$current_tag" ] || fail "IMAGE_TAG is missing in $stack_env_file"
+current_ref="$image_repository:$current_tag"
+
+mapfile -t image_refs < <(docker image ls "$image_repository" --format '{{.Repository}}:{{.Tag}}')
+[ "${#image_refs[@]}" -gt 0 ] || {
+  printf 'No local images found for %s\n' "$image_repository"
+  exit 0
+}
+
+declare -A keep_refs=()
+declare -A seen_refs=()
+ordered_refs=()
+
+for ref in "${image_refs[@]}"; do
+  if [ -z "$ref" ] || [ "${ref%:<none>}" != "$ref" ]; then
+    continue
+  fi
+  if [ -n "${seen_refs[$ref]+x}" ]; then
+    continue
+  fi
+  seen_refs[$ref]=1
+  ordered_refs+=("$ref")
+done
+
+if [ -n "${seen_refs[$current_ref]+x}" ]; then
+  keep_refs["$current_ref"]=1
+fi
+
+for ref in "${ordered_refs[@]}"; do
+  if [ "${#keep_refs[@]}" -ge "$keep_count" ]; then
+    break
+  fi
+  keep_refs["$ref"]=1
+done
+
+removed=0
+for ref in "${ordered_refs[@]}"; do
+  if [ -n "${keep_refs[$ref]+x}" ]; then
+    continue
+  fi
+  docker image rm "$ref" >/dev/null
+  removed=$((removed + 1))
+done
+
+printf 'Kept %s image(s) for %s and removed %s old image(s)\n' "${#keep_refs[@]}" "$image_repository" "$removed"
+EOF
+  chmod 755 /usr/local/bin/bootstrap-prune-images.sh
+
   write_if_changed "/usr/local/bin/bootstrap-compose-deploy.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -463,6 +597,8 @@ cache_dir=${CACHE_DIR:-$stack_dir/next-cache}
 cache_uid=${CACHE_UID:-1001}
 cache_gid=${CACHE_GID:-1001}
 auto_rollback=${AUTO_ROLLBACK:-1}
+image_repository=${IMAGE_REPOSITORY:-}
+keep_image_count=${KEEP_IMAGE_COUNT:-0}
 
 [ -f "$compose_file" ] || fail "Compose file not found: $compose_file"
 [ -f "$stack_env_file" ] || fail "Stack env file not found: $stack_env_file"
@@ -493,6 +629,12 @@ if ! run_compose_update "$compose_file" "$stack_dir" "$stack_env_file" || ! smok
 fi
 
 if [ "$deploy_failed" = "0" ]; then
+  case "$keep_image_count" in
+    ''|*[!0-9]*) keep_image_count=0 ;;
+  esac
+  if [ -n "$image_repository" ] && [ "$keep_image_count" -ge 1 ]; then
+    /usr/local/bin/bootstrap-prune-images.sh "$target" "$keep_image_count" >/dev/null 2>&1 || true
+  fi
   notify_message "${deploy_name} deploy successful
 previous image tag: ${previous_tag}
 new image tag: ${new_tag}
@@ -1198,6 +1340,8 @@ log "Installing Codex home defaults"
 ensure_codex_home_files
 log "Installing Codex skills"
 ensure_codex_skills
+log "Configuring swap"
+ensure_swapfile
 log "Writing proxy and sample app stacks"
 ensure_stack_layout
 ensure_proxy_stack

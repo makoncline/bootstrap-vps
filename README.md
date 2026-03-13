@@ -7,11 +7,12 @@ Bootstrap for a fresh Hetzner Ubuntu 24.04 VPS using:
 - Caddy as the internal reverse proxy
 - Cloudflare Tunnel for public ingress
 - unattended security updates and Docker log rotation
+- a small swapfile with low swappiness for memory spikes
 - a lightweight healthcheck timer with optional Telegram alerts
 - an optional authenticated deploy webhook for app repos
 - a minimal interactive `zsh` setup for the admin user
 - Cursor remote terminal sandbox support for Ubuntu/AppArmor hosts
-- Codex CLI plus repo-managed skills on the server
+- Codex CLI defaults plus repo-managed skills on the server
 
 ## What it does
 
@@ -32,6 +33,7 @@ Useful follow-ups:
 ./bootstrap/local/configure-deploy-target.sh bootstrap/hosts/.env.production daylilycatalog /srv/stacks/daylilycatalog https://vps-test.daylilycatalog.com
 ./bootstrap/local/configure-config-sync.sh bootstrap/hosts/.env.production daylilycatalog https://github.com/makoncline/new-daylily-catalog.git deploy/vps /srv/stacks/daylilycatalog https://vps-test.daylilycatalog.com
 ./bootstrap/local/restart-proxy.sh bootstrap/hosts/.env.production
+./bootstrap/local/prune-deploy-images.sh bootstrap/hosts/.env.production daylilycatalog 2
 ./bootstrap/local/sync-codex-skills.sh bootstrap/hosts/.env.production
 ./bootstrap/local/sync-local-codex-home.sh
 ./bootstrap/local/sync-local-codex-skills.sh
@@ -63,4 +65,4 @@ notify "deploy finished"
 
 - Detailed bootstrap and operational notes: [bootstrap/README.md](/Users/makon/dev/servers/bootstrap/README.md)
 - Manual fallback checklist: [bootstrap/OPERATIONS_PROMPT.md](/Users/makon/dev/servers/bootstrap/OPERATIONS_PROMPT.md)
-- Server operator skills: [server-new-app](/Users/makon/dev/servers/bootstrap/codex-skills/server-new-app/SKILL.md), [server-deploy-prep](/Users/makon/dev/servers/bootstrap/codex-skills/server-deploy-prep/SKILL.md)
+- Server operator skills: [server-new-app](/Users/makon/dev/servers/bootstrap/codex-skills/server-new-app/SKILL.md), [server-deploy-prep](/Users/makon/dev/servers/bootstrap/codex-skills/server-deploy-prep/SKILL.md), [server-state-audit](/Users/makon/dev/servers/bootstrap/codex-skills/server-state-audit/SKILL.md)

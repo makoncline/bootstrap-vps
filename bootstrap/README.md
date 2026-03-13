@@ -10,12 +10,13 @@ This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the ex
 - `bootstrap/local/reconcile-host.sh`: reruns the idempotent remote converger on an existing host over Tailscale SSH.
 - `bootstrap/local/configure-config-sync.sh`: registers a named config-sync target for the managed webhook on an existing host.
 - `bootstrap/local/configure-deploy-target.sh`: registers a named deploy target for the managed webhook on an existing host.
+- `bootstrap/local/prune-deploy-images.sh`: prunes old local images for a named deploy target on an existing host over Tailscale SSH.
 - `bootstrap/local/restart-proxy.sh`: restarts the managed Caddy proxy stack on an existing host so new route files take effect.
 - `bootstrap/local/cloudflare-tunnel.sh`: syncs remote-managed tunnel ingress and DNS routes through the Cloudflare API.
 - `bootstrap/local/codex-login.sh`: opens an interactive Codex login session over Tailscale SSH on the server.
 - `bootstrap/local/test-deploy-webhook.sh`: calls the managed deploy webhook for a named target and image tag.
 - `bootstrap/local/test-config-sync-webhook.sh`: calls the managed config-sync webhook for a named target and git ref.
-- `bootstrap/local/sync-local-codex-home.sh`: syncs repo-managed global Codex defaults, including `AGENTS.md` and `machine-notes.md`, onto this machine.
+- `bootstrap/local/sync-local-codex-home.sh`: syncs repo-managed global Codex defaults, including `AGENTS.md`, `machine-notes.md`, and the default Codex config, onto this machine.
 - `bootstrap/local/test-telegram-alert.sh`: sends a Telegram test message through the server's alert script.
 - `bootstrap/local/sync-local-codex-skills.sh`: syncs repo-managed Codex skills into this machine's global Codex skills directory.
 - `bootstrap/local/sync-codex-skills.sh`: syncs repo-managed Codex skills to an already-bootstrapped server.
@@ -76,9 +77,10 @@ To apply updated bootstrap logic to an already-bootstrapped host over Tailscale:
 - unattended security updates are enabled for Ubuntu packages.
 - Docker Engine and the Compose plugin are installed and enabled.
 - Docker uses local log rotation with `max-size=10m` and `max-file=3`.
+- The host has a `1G` swapfile at `/swapfile` with `vm.swappiness=10` to absorb short-lived memory spikes from interactive tooling.
 - Node.js, npm, and Codex CLI are installed on the server.
 - Cursor's `cursor-sandbox-apparmor` package is installed and its remote profile is patched with `network netlink raw` so Cursor remote terminals work on Ubuntu 24.04 AppArmor hosts.
-- repo-managed global Codex defaults are installed under `~/.codex/AGENTS.md` and `~/.codex/memories/machine-notes.md`.
+- repo-managed global Codex defaults are installed under `~/.codex/AGENTS.md`, `~/.codex/memories/machine-notes.md`, and a default `~/.codex/config.toml` if one does not already exist.
 - Repo-managed Codex skills are installed under `~/.codex/skills`.
 - `/srv/stacks/proxy` runs internal-only Caddy on the shared `edge` network.
 - `/srv/stacks/tunnel` runs `cloudflared` with the dedicated server tunnel token.
@@ -102,11 +104,22 @@ After bootstrap, authenticate interactively over Tailscale:
 
 The helper uses `codex login --device-auth`, which is the headless-friendly device-code flow for a server session. Source: [Codex CLI setup](https://developers.openai.com/codex/cli).
 
+Fresh servers also get a minimal default `~/.codex/config.toml` if none exists yet, with:
+
+- built-in web search enabled
+- workspace-write network access enabled
+
 Repo-managed server skills are bundled from `bootstrap/codex-skills` during bootstrap. To push skill updates to an existing host later:
 
 ```bash
 ./bootstrap/local/sync-codex-skills.sh bootstrap/hosts/.env.production
 ```
+
+Current repo-managed server skills include:
+
+- `server-new-app`: add or update an app under `/srv/stacks`
+- `server-deploy-prep`: prepare an app repo for this VPS pattern
+- `server-state-audit`: inspect server health, Docker disk usage, logs, and cleanup opportunities
 
 To install the same repo-managed skills as global Codex skills on this machine:
 
@@ -138,6 +151,13 @@ To register a deploy target for an app stack:
 ./bootstrap/local/configure-deploy-target.sh bootstrap/hosts/.env.production daylilycatalog /srv/stacks/daylilycatalog https://vps-test.daylilycatalog.com
 ```
 
+Optional environment overrides for deploy targets:
+
+- `DEPLOY_IMAGE_REPOSITORY=ghcr.io/makoncline/daylilycatalog`
+- `DEPLOY_KEEP_IMAGE_COUNT=2`
+
+If both are set, the server will prune old local app images after a successful deploy and keep only the newest configured count, always including the currently deployed tag.
+
 To register a config-sync target for app-owned stack files:
 
 ```bash
@@ -148,6 +168,12 @@ To test the managed deploy webhook once a target exists:
 
 ```bash
 ./bootstrap/local/test-deploy-webhook.sh bootstrap/hosts/.env.production daylilycatalog main-deadbeef
+```
+
+To prune old local images for a deploy target manually:
+
+```bash
+./bootstrap/local/prune-deploy-images.sh bootstrap/hosts/.env.production daylilycatalog 2
 ```
 
 To test the managed config-sync webhook once a target exists:

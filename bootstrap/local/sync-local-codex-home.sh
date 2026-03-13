@@ -22,4 +22,8 @@ if [ -f "$SOURCE_DIR/memories/machine-notes.md" ] && [ ! -f "$TARGET_DIR/memorie
   install -m 644 "$SOURCE_DIR/memories/machine-notes.md" "$TARGET_DIR/memories/machine-notes.md"
 fi
 
+if [ -f "$SOURCE_DIR/config.toml" ] && [ ! -f "$TARGET_DIR/config.toml" ]; then
+  install -m 644 "$SOURCE_DIR/config.toml" "$TARGET_DIR/config.toml"
+fi
+
 log "Synced repo-managed Codex home defaults to $TARGET_DIR"

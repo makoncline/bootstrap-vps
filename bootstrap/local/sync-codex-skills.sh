@@ -17,8 +17,16 @@ require_command tar
 load_env_file "$ENV_FILE"
 require_var TAILSCALE_HOSTNAME
 
+tar_skills_to_stdout() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar --no-mac-metadata --disable-copyfile --no-xattrs -C "$REPO_ROOT/bootstrap" -czf - codex-skills
+  else
+    tar -C "$REPO_ROOT/bootstrap" -czf - codex-skills
+  fi
+}
+
 log "Syncing Codex skills to $ADMIN_USER@$TAILSCALE_HOSTNAME"
-COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar -C "$REPO_ROOT/bootstrap" -czf - codex-skills | \
+tar_skills_to_stdout | \
   ssh \
     -o ConnectTimeout=10 \
     -o StrictHostKeyChecking=no \

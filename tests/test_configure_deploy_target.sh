@@ -28,6 +28,8 @@ TEST_SSH_LOG="$LOG_FILE" \
 TEST_CAPTURE_DIR="$CAPTURE_DIR" \
 ADMIN_USER=makon \
 DEPLOY_NAME="Daylily Catalog" \
+DEPLOY_IMAGE_REPOSITORY="ghcr.io/makoncline/daylilycatalog" \
+DEPLOY_KEEP_IMAGE_COUNT=2 \
 "$REPO_ROOT/bootstrap/local/configure-deploy-target.sh" \
   "$TMP_DIR/good.env" \
   daylilycatalog \
@@ -38,3 +40,5 @@ grep -q "makon@makon-dev-0" "$LOG_FILE"
 grep -q 'DEPLOY_NAME=Daylily\\ Catalog' "$CAPTURE_DIR/target.env"
 grep -q "STACK_DIR=/srv/stacks/daylilycatalog" "$CAPTURE_DIR/target.env"
 grep -q "SMOKE_URL=https://vps-test.daylilycatalog.com" "$CAPTURE_DIR/target.env"
+grep -q "IMAGE_REPOSITORY=ghcr.io/makoncline/daylilycatalog" "$CAPTURE_DIR/target.env"
+grep -q "KEEP_IMAGE_COUNT=2" "$CAPTURE_DIR/target.env"
