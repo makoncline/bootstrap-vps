@@ -52,6 +52,8 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result['create_request_id'], 'test_nonce')
         self.assertEqual(i.endpoint('/catalog/private-garden'), '[other route]')
         self.assertEqual(i.error_excerpt({'message': ['malformed']}), {})
+        self.assertEqual(i.clean(float('inf')), '[omitted]')
+        self.assertEqual(i.clean(float('nan')), '[omitted]')
 
     def test_verified_actor_schema(self):
         for record in ({'appUserId': 'test_app_user'}, {'clerkUserId': 'user_test_actor'},
@@ -134,19 +136,27 @@ class EvidenceTests(unittest.TestCase):
         last['ts'] = END.timestamp()
         args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=True)
         for field, value in [('host', []), ('method', {}), ('uri', []),
-                             ('client_ip', 123), ('headers', {'User-Agent': [123]})]:
+                             ('client_ip', 123), ('client_ip', []),
+                             ('headers', {'User-Agent': [123]}),
+                             ('headers', {'Cf-Ray': [None]}),
+                             ('headers', {'X-Correlation-Id': [{}]}),
+                             ('duration', 1e308)]:
             with self.subTest(field=field):
                 broken = copy.deepcopy(first)
-                broken['request'][field] = value
+                if field == 'duration':
+                    broken[field] = value
+                else:
+                    broken['request'][field] = value
                 lines = [json.dumps(record) for record in (first, broken, last)]
                 with patch.object(i, 'journal_configuration', lambda: 'ready'), \
-                     patch.object(i, 'journal', lambda *a, **kw: iter([])), \
+                     patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
                      patch.object(i, 'proxy', lambda _: i.records_from_lines(lines, 'proxy')), \
                      patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
                     result = i.export(args, {}, None)
                 self.assertEqual(result['sources']['proxyAccess']['status'], 'partial')
                 self.assertEqual(result['sources']['proxyAccess']['malformed_records'], 1)
                 self.assertEqual(len(result['proxyMatches']), 2)
+                json.dumps(result, allow_nan=False)
 
     def test_private_output_never_overwrites(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -41,6 +41,8 @@ def iso(value):
 
 def clean(value):
     """Whitelist scalar fields; never export arbitrary input, headers or exception text."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return '[omitted]'
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if not isinstance(value, str) or len(value) > 256:
@@ -158,7 +160,7 @@ def records_from_lines(lines, source):
                             all(isinstance(item, str) for item in value))
                        for value in request.get('headers', {}).values()):
                     raise ValueError('Expected string header values')
-                if not isinstance(record.get('status'), int) or not isinstance(record.get('duration'), (int, float)) or not math.isfinite(record['duration']):
+                if not isinstance(record.get('status'), int) or not isinstance(record.get('duration'), (int, float)) or not math.isfinite(record['duration'] * 1000):
                     raise ValueError('Expected numeric response fields')
             yield at, record
         except (ValueError, TypeError, KeyError, OverflowError, OSError):
@@ -416,7 +418,7 @@ def write_private(path, evidence):
         os.fchmod(output.fileno(), 0o600)
         if os.geteuid() == 0 and os.environ.get('SUDO_UID', '').isdigit():
             os.fchown(output.fileno(), int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID']))
-        json.dump(evidence, output, indent=2)
+        json.dump(evidence, output, indent=2, allow_nan=False)
         output.write('\n')
 
 
