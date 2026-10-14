@@ -135,14 +135,12 @@ def records_from_lines(lines, source):
             if source == 'app':
                 at = dt.datetime.fromtimestamp(int(raw['__REALTIME_TIMESTAMP']) / 1e6, UTC)
                 message = raw.get('MESSAGE', '')
-                try:
-                    if not isinstance(message, str):
-                        raise ValueError('Expected a message string')
-                    record = json.loads(message[message.index('{'):])
-                    if not isinstance(record, dict):
-                        raise ValueError('Expected a log object')
-                except (ValueError, TypeError):
-                    record = {}  # Legacy/startup lines are counted, never printed.
+                if not isinstance(message, str):
+                    raise ValueError('Expected a message string')
+                beginning = message.find('{')
+                record = json.loads(message[beginning:]) if beginning >= 0 else {}
+                if not isinstance(record, dict):
+                    raise ValueError('Expected a log object')
             else:
                 at = dt.datetime.fromtimestamp(float(raw['ts']), UTC)
                 record = raw

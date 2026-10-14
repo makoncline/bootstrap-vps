@@ -96,6 +96,24 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(sum(at is None for at, _ in rows), 1)
             self.assertEqual(list(i.records_from_lines(['[]', '{"ts":"bad"}'], 'proxy')), [(None,None), (None,None)])
 
+    def test_corrupted_audit_is_partial_and_startup_is_legacy(self):
+        def line(message, at=START):
+            return json.dumps({'__REALTIME_TIMESTAMP': str(int(at.timestamp()*1e6)), 'MESSAGE': message})
+        window = [line('Server ready'), line('INFO {"event":"user_mutation","appUserId":"test_app_user",')]
+        self.assertEqual(list(i.records_from_lines(window, 'app')), [(START, {}), (None, None)])
+        def journal(start=None, end=None, limit=None):
+            lines = window if start else [line('Server ready', END if limit else START)]
+            yield from i.records_from_lines(lines, 'app')
+        args = argparse.Namespace(start=START, end=END, correlation_id=[], infer_client=False)
+        with patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter([])), \
+             patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
+            result = i.export(args, IDENTITY, None)
+        source = result['sources']['appAndAudit']
+        self.assertEqual(source['status'], 'partial')
+        self.assertEqual(source['malformed_records'], 1)
+        self.assertEqual(source['unstructuredRecordsOmitted'], 1)
+        self.assertEqual(result['appAndAuditMatches'], [])
+
     def test_private_output_never_overwrites(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory)/'evidence.json'

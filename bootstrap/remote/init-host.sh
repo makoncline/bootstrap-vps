@@ -1227,6 +1227,7 @@ EOF
       wrap json
       fields {
         request>headers>Authorization delete
+        request>headers>X-Deploy-Token delete
         request>headers>Cookie delete
         request>headers>Set-Cookie delete
       }
