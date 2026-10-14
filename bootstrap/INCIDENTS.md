@@ -61,7 +61,11 @@ can cause false attribution; inferred audit outcomes are excluded from aggregate
 procedure counts, and correlations attributed to other actors are excluded.
 
 Source coverage includes actual oldest/newest retained timestamps, read errors,
-and malformed records. Coverage is partial if either interval edge lies outside
+and malformed records. The oldest journal scan skips malformed entries and reports
+its count separately from requested-window malformed records, avoiding double
+counting while still marking coverage partial. Proxy read errors count distinct
+failed file paths across both scans; selection-scan malformed records are reported
+separately, so a file damaged between scans also makes coverage partial. Coverage is partial if either interval edge lies outside
 that span or records cannot be read. A spanning retention window cannot prove
 there are no internal gaps. Unstructured app lines are counted and omitted. Source coverage does not establish when each
 event type became instrumented.

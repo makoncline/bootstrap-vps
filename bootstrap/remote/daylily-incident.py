@@ -138,6 +138,8 @@ def records_from_lines(lines, source):
             if not isinstance(raw, dict):
                 raise ValueError('Expected an object')
             if source == 'app':
+                if type(raw.get('__REALTIME_TIMESTAMP')) is bool:
+                    raise ValueError('Expected a numeric journal timestamp')
                 at = dt.datetime.fromtimestamp(int(raw['__REALTIME_TIMESTAMP']) / 1e6, UTC)
                 message = raw.get('MESSAGE', '')
                 if not isinstance(message, str):
@@ -150,6 +152,8 @@ def records_from_lines(lines, source):
                        for field in ('correlation_id', 'cf_ray')):
                     raise ValueError('Expected string correlation identifiers')
             else:
+                if type(raw.get('ts')) not in (int, float):
+                    raise ValueError('Expected a numeric proxy timestamp')
                 at = dt.datetime.fromtimestamp(float(raw['ts']), UTC)
                 record = raw
                 request = record.get('request')
@@ -163,7 +167,7 @@ def records_from_lines(lines, source):
                             all(isinstance(item, str) for item in value))
                        for value in request.get('headers', {}).values()):
                     raise ValueError('Expected string header values')
-                if not isinstance(record.get('status'), int) or not isinstance(record.get('duration'), (int, float)) or not math.isfinite(record['duration'] * 1000):
+                if type(record.get('status')) is not int or type(record.get('duration')) not in (int, float) or not math.isfinite(record['duration'] * 1000):
                     raise ValueError('Expected numeric response fields')
             yield at, record
         except (ValueError, TypeError, KeyError, OverflowError, OSError):
@@ -218,11 +222,11 @@ def proxy(directory):
             with opener(path, 'rb') as stream:
                 yield from records_from_lines(stream, 'proxy')
         except (OSError, EOFError, zlib.error):
-            yield None, {'read_error': True}
+            yield None, {'read_error': path.name}
 
 
-def coverage(oldest, newest, start, end, errors=0, malformed=0):
-    status = 'complete' if oldest and oldest <= start and newest and newest >= end and not errors and not malformed else 'partial'
+def coverage(oldest, newest, start, end, errors=0, malformed=0, oldest_scan_malformed=0, selection_scan_malformed=0):
+    status = 'complete' if oldest and oldest <= start and newest and newest >= end and not errors and not malformed and not oldest_scan_malformed and not selection_scan_malformed else 'partial'
     if not oldest:
         status = 'unavailable'
     return {'status': status, 'oldest_retained': iso(oldest) if oldest else None,
@@ -230,6 +234,8 @@ def coverage(oldest, newest, start, end, errors=0, malformed=0):
             'start_precedes_retained_records': bool(oldest and start < oldest),
             'end_follows_retained_records': bool(newest and end > newest),
             'read_errors': errors, 'malformed_records': malformed,
+            'oldest_scan_malformed_records': oldest_scan_malformed,
+            'selection_scan_malformed_records': selection_scan_malformed,
             'basis': 'Retention span and successful reads; internal gaps cannot be proven absent.'}
 
 
@@ -313,7 +319,7 @@ def deployment():
 
 def export(args, identity, row_counts):
     confirmed, blocked, rays = set(args.correlation_id), set(), set()
-    app_errors = malformed = legacy = 0
+    app_errors = malformed = legacy = oldest_scan_malformed = app_selection_malformed = 0
     oldest = newest = None
     app_configuration = journal_configuration()
     try:
@@ -321,7 +327,12 @@ def export(args, identity, row_counts):
             raise OSError('Required journald configuration is unavailable')
         stream = journal()
         try:
-            oldest, _ = next(stream, (None, None))
+            for at, _ in stream:
+                if at is None:
+                    oldest_scan_malformed += 1
+                    continue
+                oldest = at
+                break
         finally:
             stream.close()
         for at, _ in journal(limit=1):
@@ -345,7 +356,8 @@ def export(args, identity, row_counts):
         app_errors += 1
     blocked -= set(args.correlation_id)
     proxy_oldest = proxy_newest = None
-    proxy_errors = proxy_malformed = 0
+    proxy_errors = set()
+    proxy_malformed = proxy_selection_malformed = 0
     fingerprints = set()
     try:
         for at, record in proxy('/srv/stacks/proxy/logs'):
@@ -353,7 +365,7 @@ def export(args, identity, row_counts):
                 if record is None:
                     proxy_malformed += 1
                 else:
-                    proxy_errors += 1
+                    proxy_errors.add(record['read_error'])
                 continue
             proxy_oldest = min(proxy_oldest or at, at)
             proxy_newest = max(proxy_newest or at, at)
@@ -366,11 +378,17 @@ def export(args, identity, row_counts):
                 value = fingerprint(request)
                 if value: fingerprints.add(value)
     except (OSError, EOFError):
-        proxy_errors += 1
+        proxy_errors.add('[file enumeration]')
 
     def bounded_proxy():
+        nonlocal proxy_selection_malformed
         for at, record in proxy('/srv/stacks/proxy/logs'):
-            if at and args.start <= at <= args.end:
+            if at is None:
+                if record is None:
+                    proxy_selection_malformed += 1
+                else:
+                    proxy_errors.add(record['read_error'])
+            elif args.start <= at <= args.end:
                 yield at, record
 
     proxy_matches, inferred_cids, inferred_rays = [], set(), set()
@@ -378,10 +396,13 @@ def export(args, identity, row_counts):
         proxy_matches, inferred_cids, inferred_rays = select_proxy(
             bounded_proxy(), confirmed, blocked, rays, args.infer_client, fingerprints)
     except (OSError, EOFError):
-        proxy_errors += 1
+        proxy_errors.add('[file enumeration]')
     matches = []
     try:
         for at, record in journal(args.start, args.end) if app_configuration == 'ready' else ():
+            if at is None:
+                app_selection_malformed += 1
+                continue
             if not record:
                 continue
             cid = record.get('correlation_id')
@@ -404,10 +425,11 @@ def export(args, identity, row_counts):
             'correlationVerification': {cid: any(r.get('correlation_id') == cid for r in matches + proxy_matches)
                                         for cid in args.correlation_id},
             'deploymentNow': deployment(), 'rowCountsNow': row_counts,
-            'sources': {'appAndAudit': {**coverage(oldest, newest, args.start, args.end, app_errors, malformed), 'unstructuredRecordsOmitted': legacy,
+            'sources': {'appAndAudit': {**coverage(oldest, newest, args.start, args.end, app_errors, malformed, oldest_scan_malformed, app_selection_malformed), 'unstructuredRecordsOmitted': legacy,
                                                 'configuration': app_configuration,
                                                 'requirement': 'journald driver with tag {{.Name}}; retained journal covers container replacements'},
-                        'proxyAccess': coverage(proxy_oldest, proxy_newest, args.start, args.end, proxy_errors, proxy_malformed)},
+                        'proxyAccess': coverage(proxy_oldest, proxy_newest, args.start, args.end, len(proxy_errors), proxy_malformed,
+                                                selection_scan_malformed=proxy_selection_malformed)},
             'procedureOutcomes': [{'procedure': key[0], 'status': key[1], 'count': count} for key, count in sorted(outcomes.items(), key=lambda item: str(item[0]))],
             'appAndAuditMatches': matches, 'proxyMatches': proxy_matches,
             'limits': ['PostHog session IDs are not present in the current server schema.',

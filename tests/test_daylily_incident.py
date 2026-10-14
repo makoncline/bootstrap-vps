@@ -115,6 +115,7 @@ class EvidenceTests(unittest.TestCase):
         source = result['sources']['appAndAudit']
         self.assertEqual(source['status'], 'partial')
         self.assertEqual(source['malformed_records'], 2)
+        self.assertEqual(source['selection_scan_malformed_records'], 2)
         self.assertEqual(source['unstructuredRecordsOmitted'], 1)
         self.assertEqual(result['appAndAuditMatches'], [])
 
@@ -140,10 +141,10 @@ class EvidenceTests(unittest.TestCase):
                              ('headers', {'User-Agent': [123]}),
                              ('headers', {'Cf-Ray': [None]}),
                              ('headers', {'X-Correlation-Id': [{}]}),
-                             ('duration', 1e308)]:
+                             ('duration', 1e308), ('status', True), ('duration', False), ('ts', True)]:
             with self.subTest(field=field):
                 broken = copy.deepcopy(first)
-                if field == 'duration':
+                if field in ('duration', 'status', 'ts'):
                     broken[field] = value
                 else:
                     broken['request'][field] = value
@@ -213,6 +214,63 @@ class EvidenceTests(unittest.TestCase):
                 i.write_private(output, result)
                 self.assertEqual(output.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(json.loads(output.read_text())['sources']['proxyAccess']['read_errors'], 1)
+
+    def test_oldest_scan_skips_corruption_and_reports_partial(self):
+        def journal(start=None, end=None, limit=None):
+            if limit:
+                yield END, {}
+            elif start:
+                yield START, {'event': 'user_mutation', 'appUserId': 'test_app_user',
+                              'correlation_id': 'synthetic', 'status': 'success', 'procedure': 'test'}
+            else:
+                yield None, None
+                yield START, {}
+        args = argparse.Namespace(start=START, end=END, correlation_id=[], infer_client=False)
+        with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+             patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter([])), \
+             patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
+            result = i.export(args, IDENTITY, None)
+        source = result['sources']['appAndAudit']
+        self.assertEqual(source['status'], 'partial')
+        self.assertEqual(source['oldest_retained'], i.iso(START))
+        self.assertEqual(source['oldest_scan_malformed_records'], 1)
+        self.assertEqual(source['malformed_records'], 0)
+        self.assertEqual(len(result['appAndAuditMatches']), 1)
+
+    def test_archive_changes_between_scans_report_partial(self):
+        first = request('synthetic', 'ray_before')
+        last = request('synthetic', 'ray_after')
+        last['ts'] = END.timestamp()
+        encoded = gzip.compress(json.dumps(first).encode() + b'\n')
+        original_proxy = i.proxy
+        args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
+        for changed in (encoded[:-8], gzip.compress(b'\xff\n')):
+            with self.subTest(changed=changed[:12]), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'access-01.log').write_text(json.dumps(first) + '\n')
+                archive = root / 'access-02-size.log.gz'
+                archive.write_bytes(encoded)
+                (root / 'access-03.log').write_text(json.dumps(last) + '\n')
+                calls = 0
+                def changing_proxy(_):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2:
+                        archive.write_bytes(changed)
+                    yield from original_proxy(directory)
+                with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                     patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
+                     patch.object(i, 'proxy', changing_proxy), \
+                     patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
+                    result = i.export(args, {}, None)
+                source = result['sources']['proxyAccess']
+                self.assertEqual(source['status'], 'partial')
+                self.assertEqual(source['malformed_records'], 0)
+                if changed == encoded[:-8]:
+                    self.assertEqual(source['read_errors'], 1)
+                else:
+                    self.assertEqual(source['selection_scan_malformed_records'], 1)
+                self.assertTrue({'ray_before', 'ray_after'} <= {r['cf_ray'] for r in result['proxyMatches']})
 
     def test_private_output_never_overwrites(self):
         with tempfile.TemporaryDirectory() as directory:
