@@ -62,10 +62,17 @@ procedure counts, and correlations attributed to other actors are excluded.
 
 Source coverage includes actual oldest/newest retained timestamps, read errors,
 and malformed records. The oldest journal scan skips malformed entries and reports
-its count separately from requested-window malformed records, avoiding double
-counting while still marking coverage partial. Proxy read errors count distinct
+the maximum skipped prefix over initial/final probes separately from
+requested-window malformed records. The newest boundary scans at most 128 records
+in reverse and reports skipped corruption. Either makes coverage partial. Proxy read errors count distinct
 failed file paths across both scans; selection-scan malformed records are reported
-separately, so a file damaged between scans also makes coverage partial. Coverage is partial if either interval edge lies outside
+separately, so a file damaged between scans also makes coverage partial. Both
+proxy scans reuse a small path/device/inode/size inventory; opened descriptors
+are checked against it and the final inventory detects removed, replaced, shrunk
+or newly rotated files. Same-inode append growth is allowed. Consistency failures
+count affected file paths alongside read errors. After matching, the oldest valid
+journal boundary is rechecked and the later bound is used, detecting vacuumed
+history without buffering raw candidates. Coverage is partial if either interval edge lies outside
 that span or records cannot be read. A spanning retention window cannot prove
 there are no internal gaps. Unstructured app lines are counted and omitted. Source coverage does not establish when each
 event type became instrumented.

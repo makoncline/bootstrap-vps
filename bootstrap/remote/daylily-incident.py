@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import stat
 import sys
 import zlib
 
@@ -187,13 +188,29 @@ def command_lines(args):
         process.wait()
 
 
-def journal(start=None, end=None, limit=None):
+def journal(start=None, end=None, limit=None, reverse=False):
     args = ['journalctl', '-t', CONTAINER, '--no-pager', '-o', 'json']
     if start:
         args += ['--since', iso(start), '--until', iso(end)]
     if limit:
         args += ['-n', str(limit)]
+    if reverse:
+        args.append('--reverse')
     yield from records_from_lines(command_lines(args), 'app')
+
+
+def journal_boundary(reverse=False):
+    skipped = 0
+    stream = journal(limit=128 if reverse else None, reverse=reverse)
+    try:
+        for at, _ in stream:
+            if at is None:
+                skipped += 1
+            else:
+                return at, skipped
+        return None, skipped
+    finally:
+        stream.close()
 
 
 def journal_configuration():
@@ -209,24 +226,40 @@ def journal_configuration():
     return 'ready' if config.get('driver') == 'journald' and config.get('tag') == '{{.Name}}' else 'configuration-required'
 
 
-def proxy(directory):
-    seen = set()
+def proxy_inventory(directory):
+    inventory, seen = {}, set()
     for path in sorted(Path(directory).glob('access*.log*')):
         try:
-            stat = path.stat()
-            inode = (stat.st_dev, stat.st_ino)
-            if inode in seen or not path.is_file():
+            current = path.stat()
+        except OSError:
+            inventory[path] = None
+            continue
+        inode = (current.st_dev, current.st_ino)
+        if stat.S_ISREG(current.st_mode) and inode not in seen:
+            seen.add(inode)
+            inventory[path] = (*inode, current.st_size)
+    return inventory
+
+
+def proxy(inventory):
+    for path, expected in inventory.items():
+        try:
+            if expected is None:
+                yield None, {'read_error': path.name}
                 continue
-            seen.add(inode)  # Do not double-count compatibility symlinks.
             opener = gzip.open if path.suffix == '.gz' else open
             with opener(path, 'rb') as stream:
+                opened = os.fstat(stream.fileno())
+                if (opened.st_dev, opened.st_ino) != expected[:2] or opened.st_size < expected[2]:
+                    yield None, {'read_error': path.name}
+                    continue
                 yield from records_from_lines(stream, 'proxy')
         except (OSError, EOFError, zlib.error):
             yield None, {'read_error': path.name}
 
 
-def coverage(oldest, newest, start, end, errors=0, malformed=0, oldest_scan_malformed=0, selection_scan_malformed=0):
-    status = 'complete' if oldest and oldest <= start and newest and newest >= end and not errors and not malformed and not oldest_scan_malformed and not selection_scan_malformed else 'partial'
+def coverage(oldest, newest, start, end, errors=0, malformed=0, oldest_scan_malformed=0, selection_scan_malformed=0, newest_scan_malformed=0):
+    status = 'complete' if oldest and oldest <= start and newest and newest >= end and not errors and not malformed and not oldest_scan_malformed and not selection_scan_malformed and not newest_scan_malformed else 'partial'
     if not oldest:
         status = 'unavailable'
     return {'status': status, 'oldest_retained': iso(oldest) if oldest else None,
@@ -236,6 +269,7 @@ def coverage(oldest, newest, start, end, errors=0, malformed=0, oldest_scan_malf
             'read_errors': errors, 'malformed_records': malformed,
             'oldest_scan_malformed_records': oldest_scan_malformed,
             'selection_scan_malformed_records': selection_scan_malformed,
+            'newest_scan_malformed_records': newest_scan_malformed,
             'basis': 'Retention span and successful reads; internal gaps cannot be proven absent.'}
 
 
@@ -319,24 +353,14 @@ def deployment():
 
 def export(args, identity, row_counts):
     confirmed, blocked, rays = set(args.correlation_id), set(), set()
-    app_errors = malformed = legacy = oldest_scan_malformed = app_selection_malformed = 0
+    app_errors = malformed = legacy = oldest_scan_malformed = newest_scan_malformed = app_selection_malformed = 0
     oldest = newest = None
     app_configuration = journal_configuration()
     try:
         if app_configuration != 'ready':
             raise OSError('Required journald configuration is unavailable')
-        stream = journal()
-        try:
-            for at, _ in stream:
-                if at is None:
-                    oldest_scan_malformed += 1
-                    continue
-                oldest = at
-                break
-        finally:
-            stream.close()
-        for at, _ in journal(limit=1):
-            newest = at
+        oldest, oldest_scan_malformed = journal_boundary()
+        newest, newest_scan_malformed = journal_boundary(reverse=True)
         # First pass retains identifiers only; no raw window or private payload is buffered.
         for at, record in journal(args.start, args.end):
             if at is None:
@@ -359,8 +383,10 @@ def export(args, identity, row_counts):
     proxy_errors = set()
     proxy_malformed = proxy_selection_malformed = 0
     fingerprints = set()
+    inventory = {}
     try:
-        for at, record in proxy('/srv/stacks/proxy/logs'):
+        inventory = proxy_inventory('/srv/stacks/proxy/logs')
+        for at, record in proxy(inventory):
             if at is None:
                 if record is None:
                     proxy_malformed += 1
@@ -382,7 +408,7 @@ def export(args, identity, row_counts):
 
     def bounded_proxy():
         nonlocal proxy_selection_malformed
-        for at, record in proxy('/srv/stacks/proxy/logs'):
+        for at, record in proxy(inventory):
             if at is None:
                 if record is None:
                     proxy_selection_malformed += 1
@@ -417,6 +443,21 @@ def export(args, identity, row_counts):
                 matches.append(item)
     except OSError:
         app_errors += 1
+    try:
+        final_inventory = proxy_inventory('/srv/stacks/proxy/logs')
+        for path in inventory.keys() | final_inventory.keys():
+            initial, final = inventory.get(path), final_inventory.get(path)
+            if initial is None or final is None or initial[:2] != final[:2] or final[2] < initial[2]:
+                proxy_errors.add(path.name)
+    except OSError:
+        proxy_errors.add('[file enumeration]')
+    if app_configuration == 'ready':
+        try:
+            retained_oldest, skipped = journal_boundary()
+            oldest_scan_malformed = max(oldest_scan_malformed, skipped)
+            oldest = max(oldest, retained_oldest) if oldest and retained_oldest else retained_oldest
+        except OSError:
+            app_errors += 1
     outcomes = collections.Counter((r.get('procedure'), r.get('status')) for r in matches
                                    if r.get('event') == 'user_mutation' and r['attribution'] != 'client-inferred; identity not proven')
     return {'schemaVersion': 1, 'requestedUTC': {'start': iso(args.start), 'end': iso(args.end)},
@@ -425,7 +466,7 @@ def export(args, identity, row_counts):
             'correlationVerification': {cid: any(r.get('correlation_id') == cid for r in matches + proxy_matches)
                                         for cid in args.correlation_id},
             'deploymentNow': deployment(), 'rowCountsNow': row_counts,
-            'sources': {'appAndAudit': {**coverage(oldest, newest, args.start, args.end, app_errors, malformed, oldest_scan_malformed, app_selection_malformed), 'unstructuredRecordsOmitted': legacy,
+            'sources': {'appAndAudit': {**coverage(oldest, newest, args.start, args.end, app_errors, malformed, oldest_scan_malformed, app_selection_malformed, newest_scan_malformed), 'unstructuredRecordsOmitted': legacy,
                                                 'configuration': app_configuration,
                                                 'requirement': 'journald driver with tag {{.Name}}; retained journal covers container replacements'},
                         'proxyAccess': coverage(proxy_oldest, proxy_newest, args.start, args.end, len(proxy_errors), proxy_malformed,

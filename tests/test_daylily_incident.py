@@ -94,7 +94,7 @@ class EvidenceTests(unittest.TestCase):
             (root/'access.log').symlink_to('access-retained.log')
             with gzip.open(root/'access-retained-test-size.log.gz', 'wt') as stream:
                 stream.write(json.dumps(request('two'))+'\n')
-            rows = list(i.proxy(root))
+            rows = list(i.proxy(i.proxy_inventory(root)))
             self.assertEqual(len(rows), 3)
             self.assertEqual(sum(at is None for at, _ in rows), 1)
             self.assertEqual(list(i.records_from_lines(['[]', '{"ts":"bad"}'], 'proxy')), [(None,None), (None,None)])
@@ -105,11 +105,11 @@ class EvidenceTests(unittest.TestCase):
         window = [line('Server ready'), line('INFO {"event":"user_mutation","appUserId":"test_app_user",'),
                   line('{"event":"user_mutation","correlation_id":[]}')]
         self.assertEqual(list(i.records_from_lines(window, 'app')), [(START, {}), (None, None), (None, None)])
-        def journal(start=None, end=None, limit=None):
+        def journal(start=None, end=None, limit=None, reverse=False):
             lines = window if start else [line('Server ready', END if limit else START)]
             yield from i.records_from_lines(lines, 'app')
         args = argparse.Namespace(start=START, end=END, correlation_id=[], infer_client=False)
-        with patch.object(i, 'journal_configuration', lambda: 'ready'), patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter([])), \
+        with patch.object(i, 'proxy_inventory', lambda _: {}), patch.object(i, 'journal_configuration', lambda: 'ready'), patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter([])), \
              patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
             result = i.export(args, IDENTITY, None)
         source = result['sources']['appAndAudit']
@@ -122,7 +122,7 @@ class EvidenceTests(unittest.TestCase):
     def test_non_journald_backend_reports_configuration_required(self):
         response = subprocess.CompletedProcess([], 0, '{"driver":"json-file","tag":null}', '')
         args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
-        with patch.object(i.subprocess, 'run', return_value=response), \
+        with patch.object(i, 'proxy_inventory', lambda _: {}), patch.object(i.subprocess, 'run', return_value=response), \
              patch.object(i, 'journal', side_effect=AssertionError('Must not read an unsupported journal source')), \
              patch.object(i, 'proxy', lambda _: iter([])), \
              patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
@@ -149,7 +149,7 @@ class EvidenceTests(unittest.TestCase):
                 else:
                     broken['request'][field] = value
                 lines = [json.dumps(record) for record in (first, broken, last)]
-                with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                with patch.object(i, 'proxy_inventory', lambda _: {}), patch.object(i, 'journal_configuration', lambda: 'ready'), \
                      patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
                      patch.object(i, 'proxy', lambda _: i.records_from_lines(lines, 'proxy')), \
                      patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
@@ -165,6 +165,7 @@ class EvidenceTests(unittest.TestCase):
         last['ts'] = END.timestamp()
         payload = json.dumps(first).encode() + b'\n\xff\n' + json.dumps(last).encode() + b'\n'
         original_proxy = i.proxy
+        original_inventory = i.proxy_inventory
         args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
         for compressed in (False, True):
             with self.subTest(compressed=compressed), tempfile.TemporaryDirectory() as directory:
@@ -174,9 +175,9 @@ class EvidenceTests(unittest.TestCase):
                         stream.write(payload)
                 else:
                     path.write_bytes(payload)
-                with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                with patch.object(i, 'proxy_inventory', lambda _: original_inventory(directory)), patch.object(i, 'journal_configuration', lambda: 'ready'), \
                      patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
-                     patch.object(i, 'proxy', lambda _: original_proxy(directory)), \
+                     patch.object(i, 'proxy', original_proxy), \
                      patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
                     result = i.export(args, {}, None)
                 self.assertEqual(result['sources']['proxyAccess']['status'], 'partial')
@@ -195,6 +196,7 @@ class EvidenceTests(unittest.TestCase):
         corrupt = bytearray(encoded)
         corrupt[10] = 0xff  # Invalid deflate block type produces zlib.error.
         original_proxy = i.proxy
+        original_inventory = i.proxy_inventory
         args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
         for damaged in (encoded[:-8], bytes(corrupt)):
             with self.subTest(damaged=damaged[:12]), tempfile.TemporaryDirectory() as directory:
@@ -202,9 +204,9 @@ class EvidenceTests(unittest.TestCase):
                 (root / 'access-01.log').write_text(json.dumps(first) + '\n')
                 (root / 'access-02-size.log.gz').write_bytes(damaged)
                 (root / 'access-03.log').write_text(json.dumps(last) + '\n')
-                with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                with patch.object(i, 'proxy_inventory', lambda _: original_inventory(directory)), patch.object(i, 'journal_configuration', lambda: 'ready'), \
                      patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
-                     patch.object(i, 'proxy', lambda _: original_proxy(directory)), \
+                     patch.object(i, 'proxy', original_proxy), \
                      patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
                     result = i.export(args, {}, None)
                 self.assertEqual(result['sources']['proxyAccess']['status'], 'partial')
@@ -216,7 +218,7 @@ class EvidenceTests(unittest.TestCase):
                 self.assertEqual(json.loads(output.read_text())['sources']['proxyAccess']['read_errors'], 1)
 
     def test_oldest_scan_skips_corruption_and_reports_partial(self):
-        def journal(start=None, end=None, limit=None):
+        def journal(start=None, end=None, limit=None, reverse=False):
             if limit:
                 yield END, {}
             elif start:
@@ -226,7 +228,7 @@ class EvidenceTests(unittest.TestCase):
                 yield None, None
                 yield START, {}
         args = argparse.Namespace(start=START, end=END, correlation_id=[], infer_client=False)
-        with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+        with patch.object(i, 'proxy_inventory', lambda _: {}), patch.object(i, 'journal_configuration', lambda: 'ready'), \
              patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter([])), \
              patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
             result = i.export(args, IDENTITY, None)
@@ -243,6 +245,7 @@ class EvidenceTests(unittest.TestCase):
         last['ts'] = END.timestamp()
         encoded = gzip.compress(json.dumps(first).encode() + b'\n')
         original_proxy = i.proxy
+        original_inventory = i.proxy_inventory
         args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
         for changed in (encoded[:-8], gzip.compress(b'\xff\n')):
             with self.subTest(changed=changed[:12]), tempfile.TemporaryDirectory() as directory:
@@ -252,13 +255,13 @@ class EvidenceTests(unittest.TestCase):
                 archive.write_bytes(encoded)
                 (root / 'access-03.log').write_text(json.dumps(last) + '\n')
                 calls = 0
-                def changing_proxy(_):
+                def changing_proxy(inventory):
                     nonlocal calls
                     calls += 1
                     if calls == 2:
                         archive.write_bytes(changed)
-                    yield from original_proxy(directory)
-                with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                    yield from original_proxy(inventory)
+                with patch.object(i, 'proxy_inventory', lambda _: original_inventory(directory)), patch.object(i, 'journal_configuration', lambda: 'ready'), \
                      patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
                      patch.object(i, 'proxy', changing_proxy), \
                      patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
@@ -269,8 +272,120 @@ class EvidenceTests(unittest.TestCase):
                 if changed == encoded[:-8]:
                     self.assertEqual(source['read_errors'], 1)
                 else:
-                    self.assertEqual(source['selection_scan_malformed_records'], 1)
+                    self.assertGreater(source['read_errors'] + source['selection_scan_malformed_records'], 0)
                 self.assertTrue({'ray_before', 'ray_after'} <= {r['cf_ray'] for r in result['proxyMatches']})
+
+    def test_proxy_inventory_loss_rotation_and_append(self):
+        original_inventory, original_proxy = i.proxy_inventory, i.proxy
+        args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
+        for action in ('delete', 'rotate', 'replace', 'append'):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                first, middle, last = request('synthetic', 'before'), request('synthetic', 'middle'), request('synthetic', 'after')
+                last['ts'] = END.timestamp()
+                for name, row in [('access-01.log', first), ('access-02.log', middle), ('access-03.log', last)]:
+                    (root / name).write_text(json.dumps(row) + '\n')
+                active = root / 'access-02.log'
+                later = request('synthetic', 'later')
+                later['ts'] = (END + dt.timedelta(seconds=1)).timestamp()
+                calls = 0
+                def changing_proxy(inventory):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2:
+                        if action == 'delete':
+                            active.unlink()
+                        elif action == 'rotate':
+                            active.rename(root / 'access-02-rotated.log')
+                            active.write_text(json.dumps(later) + '\n')
+                        elif action == 'replace':
+                            replacement = root / 'replacement.tmp'
+                            replacement.write_text(json.dumps(later) + '\n')
+                            replacement.replace(active)
+                        else:
+                            with active.open('a') as stream:
+                                stream.write(json.dumps(later) + '\n')
+                    yield from original_proxy(inventory)
+                with patch.object(i, 'proxy_inventory', lambda _: original_inventory(directory)), \
+                     patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                     patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
+                     patch.object(i, 'proxy', changing_proxy), \
+                     patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
+                    result = i.export(args, {}, None)
+                source = result['sources']['proxyAccess']
+                self.assertEqual(source['status'], 'complete' if action == 'append' else 'partial')
+                self.assertEqual(source['read_errors'] == 0, action == 'append')
+                self.assertTrue({'before', 'after'} <= {row['cf_ray'] for row in result['proxyMatches']})
+                if action == 'append':
+                    self.assertEqual(len(result['proxyMatches']), 3)
+
+    def test_proxy_replacement_between_snapshot_and_open(self):
+        import builtins
+        original_inventory, original_open = i.proxy_inventory, builtins.open
+        args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, last = request('synthetic', 'before'), request('synthetic', 'after')
+            last['ts'] = END.timestamp()
+            (root / 'access-01.log').write_text(json.dumps(first) + '\n')
+            active = root / 'access-02.log'
+            active.write_text(json.dumps(first) + '\n')
+            (root / 'access-03.log').write_text(json.dumps(last) + '\n')
+            moved = False
+            def rotating_open(path, *args, **kwargs):
+                nonlocal moved
+                if Path(path) == active and args and args[0] == 'rb' and not moved:
+                    moved = True
+                    active.rename(root / 'access-02-rotated.log')
+                    active.write_text(json.dumps(last) + '\n')
+                return original_open(path, *args, **kwargs)
+            with patch.object(i, 'proxy_inventory', lambda _: original_inventory(directory)), \
+                 patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                 patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
+                 patch.object(i, 'deployment', lambda: {'status': 'unavailable'}), \
+                 patch('builtins.open', rotating_open):
+                result = i.export(args, {}, None)
+            self.assertTrue(moved)
+            self.assertEqual(result['sources']['proxyAccess']['status'], 'partial')
+            self.assertGreater(result['sources']['proxyAccess']['read_errors'], 0)
+            self.assertTrue({'before', 'after'} <= {row['cf_ray'] for row in result['proxyMatches']})
+
+    def test_journal_vacuum_and_newest_corruption(self):
+        def encoded(at, message):
+            return json.dumps({'__REALTIME_TIMESTAMP': str(int(at.timestamp()*1e6)), 'MESSAGE': message}).encode()
+        audit = {'event': 'user_mutation', 'appUserId': 'test_app_user', 'correlation_id': 'synthetic',
+                 'status': 'success', 'procedure': 'test'}
+        args = argparse.Namespace(start=START, end=END, correlation_id=[], infer_client=False)
+        for vacuum in (False, True):
+            with self.subTest(vacuum=vacuum):
+                windows, removed = 0, False
+                def journal(start=None, end=None, limit=None, reverse=False):
+                    nonlocal windows, removed
+                    if reverse:
+                        self.assertEqual(limit, 128)
+                        lines = [encoded(END, '{"correlation_id":[]}'), encoded(END, 'Server ready')]
+                    elif start:
+                        windows += 1
+                        if vacuum and windows == 2:
+                            removed = True
+                            lines = []
+                        else:
+                            lines = [encoded(START, json.dumps(audit))]
+                    else:
+                        lines = [encoded(END if removed else START, 'Server ready')]
+                    yield from i.records_from_lines(lines, 'app')
+                with patch.object(i, 'proxy_inventory', lambda _: {}), \
+                     patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                     patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter([])), \
+                     patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
+                    result = i.export(args, IDENTITY, None)
+                source = result['sources']['appAndAudit']
+                self.assertEqual(source['status'], 'partial')
+                self.assertEqual(source['newest_retained'], i.iso(END))
+                self.assertEqual(source['newest_scan_malformed_records'], 1)
+                self.assertEqual(source['oldest_retained'], i.iso(END if vacuum else START))
+                self.assertEqual(source['start_precedes_retained_records'], vacuum)
+                self.assertEqual(len(result['appAndAuditMatches']), 0 if vacuum else 1)
 
     def test_private_output_never_overwrites(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -293,11 +408,11 @@ class EvidenceTests(unittest.TestCase):
                         'error': {'code': 'INTERNAL_SERVER_ERROR', 'message': 'fetch failed'}}),
                (START, {'event': 'user_mutation', 'correlation_id': 'inferred', 'status': 'success', 'procedure': 'test'}),
                (START, {'clerk_user_id': 'user_other', 'correlation_id': 'known_other'})]
-        def journal(start=None, end=None, limit=None):
+        def journal(start=None, end=None, limit=None, reverse=False):
             yield from ([(START, {})] if start is None and not limit else [(END, {})] if limit else app)
         proxies = [(START,request('exact')), (START,request('inferred','ray_inferred')),
                    (START,request('known_other','ray_other')), (END,request('not_selected','ray_end'))]
-        with patch.object(i, 'journal_configuration', lambda: 'ready'), patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter(proxies)), \
+        with patch.object(i, 'proxy_inventory', lambda _: {}), patch.object(i, 'journal_configuration', lambda: 'ready'), patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter(proxies)), \
              patch.object(i, 'deployment', lambda: {'status': 'available', 'release': 'synthetic'}):
             result = i.export(args, IDENTITY, None)
         self.assertEqual(len(result['appAndAuditMatches']), 3)
