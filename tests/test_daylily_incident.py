@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic tests: no Docker, journal, network, or real identities."""
 import argparse
+import copy
 import datetime as dt
 import gzip
 import importlib.util
@@ -99,8 +100,9 @@ class EvidenceTests(unittest.TestCase):
     def test_corrupted_audit_is_partial_and_startup_is_legacy(self):
         def line(message, at=START):
             return json.dumps({'__REALTIME_TIMESTAMP': str(int(at.timestamp()*1e6)), 'MESSAGE': message})
-        window = [line('Server ready'), line('INFO {"event":"user_mutation","appUserId":"test_app_user",')]
-        self.assertEqual(list(i.records_from_lines(window, 'app')), [(START, {}), (None, None)])
+        window = [line('Server ready'), line('INFO {"event":"user_mutation","appUserId":"test_app_user",'),
+                  line('{"event":"user_mutation","correlation_id":[]}')]
+        self.assertEqual(list(i.records_from_lines(window, 'app')), [(START, {}), (None, None), (None, None)])
         def journal(start=None, end=None, limit=None):
             lines = window if start else [line('Server ready', END if limit else START)]
             yield from i.records_from_lines(lines, 'app')
@@ -110,7 +112,7 @@ class EvidenceTests(unittest.TestCase):
             result = i.export(args, IDENTITY, None)
         source = result['sources']['appAndAudit']
         self.assertEqual(source['status'], 'partial')
-        self.assertEqual(source['malformed_records'], 1)
+        self.assertEqual(source['malformed_records'], 2)
         self.assertEqual(source['unstructuredRecordsOmitted'], 1)
         self.assertEqual(result['appAndAuditMatches'], [])
 
@@ -125,6 +127,26 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result['sources']['appAndAudit']['status'], 'unavailable')
         self.assertEqual(result['sources']['appAndAudit']['configuration'], 'configuration-required')
         self.assertEqual(result['appAndAuditMatches'], [])
+
+    def test_corrupt_proxy_fields_produce_partial_evidence(self):
+        first = request('synthetic')
+        last = request('synthetic')
+        last['ts'] = END.timestamp()
+        args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=True)
+        for field, value in [('host', []), ('method', {}), ('uri', []),
+                             ('client_ip', 123), ('headers', {'User-Agent': [123]})]:
+            with self.subTest(field=field):
+                broken = copy.deepcopy(first)
+                broken['request'][field] = value
+                lines = [json.dumps(record) for record in (first, broken, last)]
+                with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                     patch.object(i, 'journal', lambda *a, **kw: iter([])), \
+                     patch.object(i, 'proxy', lambda _: i.records_from_lines(lines, 'proxy')), \
+                     patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
+                    result = i.export(args, {}, None)
+                self.assertEqual(result['sources']['proxyAccess']['status'], 'partial')
+                self.assertEqual(result['sources']['proxyAccess']['malformed_records'], 1)
+                self.assertEqual(len(result['proxyMatches']), 2)
 
     def test_private_output_never_overwrites(self):
         with tempfile.TemporaryDirectory() as directory:

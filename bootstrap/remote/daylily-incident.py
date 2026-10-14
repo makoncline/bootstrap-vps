@@ -141,12 +141,23 @@ def records_from_lines(lines, source):
                 record = json.loads(message[beginning:]) if beginning >= 0 else {}
                 if not isinstance(record, dict):
                     raise ValueError('Expected a log object')
+                if any(record.get(field) is not None and not isinstance(record[field], str)
+                       for field in ('correlation_id', 'cf_ray')):
+                    raise ValueError('Expected string correlation identifiers')
             else:
                 at = dt.datetime.fromtimestamp(float(raw['ts']), UTC)
                 record = raw
                 request = record.get('request')
                 if not isinstance(request, dict) or not isinstance(request.get('headers', {}), dict):
                     raise ValueError('Expected a request object')
+                if any(not isinstance(request.get(field), str) for field in ('host', 'method', 'uri')):
+                    raise ValueError('Expected string request fields')
+                if not isinstance(request.get('client_ip', ''), str):
+                    raise ValueError('Expected a client address string')
+                if any(not (isinstance(value, str) or isinstance(value, list) and
+                            all(isinstance(item, str) for item in value))
+                       for value in request.get('headers', {}).values()):
+                    raise ValueError('Expected string header values')
                 if not isinstance(record.get('status'), int) or not isinstance(record.get('duration'), (int, float)) or not math.isfinite(record['duration']):
                     raise ValueError('Expected numeric response fields')
             yield at, record
