@@ -95,7 +95,7 @@ def app_excerpt(record, at):
 
 
 def actor_matches(record, identity):
-    if not identity:
+    if not identity or other_actor(record, identity):
         return False
     return (record.get('appUserId') == identity['appUserId'] or
             bool(identity.get('clerkUserId')) and any(

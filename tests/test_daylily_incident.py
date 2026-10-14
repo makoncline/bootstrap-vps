@@ -59,6 +59,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertFalse(i.other_actor(record, IDENTITY))
         self.assertFalse(i.actor_matches({}, {'appUserId': 'test_app_user', 'clerkUserId': None}))
         self.assertTrue(i.other_actor({'clerk_user_id': 'user_other'}, IDENTITY))
+        self.assertFalse(i.actor_matches({'appUserId': 'test_app_user', 'clerk_user_id': 'user_other'}, IDENTITY))
 
     def test_proxy_exact_and_optional_inference(self):
         rows = [(START, request('exact')), (START, request('inferred', 'other_ray')),
