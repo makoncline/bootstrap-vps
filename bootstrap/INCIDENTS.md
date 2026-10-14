@@ -17,7 +17,9 @@ logging:
 ```
 
 This belongs to the app-owned `apps/main/deploy/vps/compose.yaml`, not Docker's
-global defaults. The CLI checks the running container's driver/tag and reports
+global defaults. The tracked prerequisite is [app PR #462](https://github.com/makoncline/new-daylily-catalog/pull/462);
+include that configuration in the normal app deployment before using the exporter
+on a host with bootstrap's default Docker logging settings. The CLI checks the running container's driver/tag and reports
 `configuration-required` with unavailable app coverage if they do not match.
 It reads the retained journal across container replacements, preserving this
 host's existing 14-day journal policy. It does not fall back to current-container
