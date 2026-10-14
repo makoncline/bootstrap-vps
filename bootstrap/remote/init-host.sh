@@ -1226,6 +1226,7 @@ EOF
     format filter {
       wrap json
       fields {
+        request>uri regexp "[?].*$" ""
         request>headers>Authorization delete
         request>headers>X-Deploy-Token delete
         request>headers>Cookie delete

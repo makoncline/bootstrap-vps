@@ -55,7 +55,10 @@ as proxy status. PostHog session IDs are absent from the current server schema.
 The template mounts `./logs` and writes `access-retained.log` with 20 MiB rotations,
 64 archives and the existing 168-hour age ceiling. Compression remains enabled.
 Access-log filtering removes Authorization, X-Deploy-Token, Cookie and Set-Cookie
-request headers before writing records.
+request headers before writing records. The supported Caddy regexp filter strips
+all query contents from request.uri before writing, preserving the path. Earlier
+retained logs can contain sensitive query data; preserve their restricted access
+and do not delete or rewrite them without separate authorization.
 At the measured peak complete rolling-hour rate of 9.687 MiB/hour, 1,280 MiB of
 archives estimates 132 hours of coverage. The 96-hour target remains viable up to
 13.33 MiB/hour. Re-measure if traffic grows; this capacity estimate is not a
