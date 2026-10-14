@@ -15,3 +15,5 @@ REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 "$REPO_ROOT/tests/test_swap_bootstrap.sh"
 "$REPO_ROOT/tests/test_sync_config_restart_strategy.sh"
 "$REPO_ROOT/tests/test_sync_local_codex_home.sh"
+
+python3 "$REPO_ROOT/tests/test_daylily_incident.py"

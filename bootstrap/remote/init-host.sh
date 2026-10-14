@@ -1177,7 +1177,7 @@ EOF
 }
 
 ensure_stack_layout() {
-  install -d -m 755 /srv/stacks/proxy/sites /srv/stacks/tunnel /srv/stacks/whoami
+  install -d -m 755 /srv/stacks/proxy/sites /srv/stacks/proxy/logs /srv/stacks/tunnel /srv/stacks/whoami
   install -d -m 755 -o "$ADMIN_USER" -g "$ADMIN_USER" /var/lib/bootstrap-config-sync
   chown -R "$ADMIN_USER:$ADMIN_USER" /srv/stacks
 }
@@ -1197,6 +1197,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./sites:/etc/caddy/sites:ro
+      - ./logs:/var/log/caddy
       - caddy_data:/data
       - caddy_config:/config
 
@@ -1216,6 +1217,22 @@ EOF
 }
 
 :80 {
+  log {
+    output file /var/log/caddy/access-retained.log {
+      roll_size 20MiB
+      roll_keep 64
+      roll_keep_for 168h
+    }
+    format filter {
+      wrap json
+      fields {
+        request>headers>Authorization delete
+        request>headers>Cookie delete
+        request>headers>Set-Cookie delete
+      }
+    }
+  }
+
   import /etc/caddy/sites/*.caddy
   respond "unconfigured host" 404
 }
@@ -1354,6 +1371,7 @@ log "Installing monitoring scripts and timer"
 ensure_monitoring_config
 ensure_deploy_webhook_config
 ensure_deploy_scripts
+install -m 755 "$SCRIPT_DIR/daylily-incident.py" /usr/local/bin/daylily-incident
 ensure_deploy_webhook_service
 ensure_internal_firewall_rules
 ensure_healthcheck_scripts

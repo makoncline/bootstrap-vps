@@ -42,6 +42,8 @@ Useful follow-ups:
 ./bootstrap/local/test-config-sync-webhook.sh bootstrap/hosts/.env.production daylilycatalog <git-sha>
 ```
 
+For bounded read-only Daylily evidence exports and proxy log retention, see [incident operations](bootstrap/INCIDENTS.md).
+
 When you add or change Caddy route files under `/srv/stacks/proxy/sites` on the server, use `bootstrap/local/restart-proxy.sh`. This bootstrap runs Caddy with the admin API disabled, so `caddy reload` is not the right apply path.
 
 If you enable `DEPLOY_WEBHOOK_HOSTNAME` and `DEPLOY_WEBHOOK_TOKEN` in [`bootstrap/hosts/.env.example`](/Users/makon/dev/servers/bootstrap/hosts/.env.example), bootstrap will also install a small authenticated deploy webhook on the server. App repos can call it after a successful image push.
