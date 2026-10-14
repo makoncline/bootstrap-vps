@@ -141,7 +141,7 @@ class EvidenceTests(unittest.TestCase):
                              ('headers', {'User-Agent': [123]}),
                              ('headers', {'Cf-Ray': [None]}),
                              ('headers', {'X-Correlation-Id': [{}]}),
-                             ('duration', 1e308), ('status', True), ('duration', False), ('ts', True)]:
+                             ('duration', 1e308), ('duration', -1), ('status', True), ('duration', False), ('ts', True)]:
             with self.subTest(field=field):
                 broken = copy.deepcopy(first)
                 if field in ('duration', 'status', 'ts'):
@@ -401,13 +401,15 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(json.loads(out.read_text()), {'safe': True})
 
     def test_full_export_excludes_other_actor_and_inferred_outcomes(self):
-        args = argparse.Namespace(start=START, end=END, correlation_id=['missing'], infer_client=True)
-        app = [(START, {'event': 'user_mutation', 'appUserId': 'test_app_user', 'correlation_id': 'exact',
+        args = argparse.Namespace(start=START, end=END, correlation_id=['missing', 'explicit'], infer_client=True)
+        app = [(START, {'event': 'user_mutation', 'appUserId': 'test_app_user', 'correlation_id': 'exact', 'cf_ray': 'shared',
                         'status': 'error', 'procedure': 'dashboardDb.listing.create'}),
                (START, {'event': 'application_error', 'correlation_id': 'exact',
                         'error': {'code': 'INTERNAL_SERVER_ERROR', 'message': 'fetch failed'}}),
                (START, {'event': 'user_mutation', 'correlation_id': 'inferred', 'status': 'success', 'procedure': 'test'}),
-               (START, {'clerk_user_id': 'user_other', 'correlation_id': 'known_other'})]
+               (START, {'clerk_user_id': 'user_other', 'correlation_id': 'known_other'}),
+               (START, {'appUserId': 'other_app_user', 'cf_ray': 'shared', 'event': 'user_mutation'}),
+               (START, {'appUserId': 'explicit_other', 'correlation_id': 'explicit', 'event': 'application_error'})]
         def journal(start=None, end=None, limit=None, reverse=False):
             yield from ([(START, {})] if start is None and not limit else [(END, {})] if limit else app)
         proxies = [(START,request('exact')), (START,request('inferred','ray_inferred')),
@@ -415,12 +417,15 @@ class EvidenceTests(unittest.TestCase):
         with patch.object(i, 'proxy_inventory', lambda _: {}), patch.object(i, 'journal_configuration', lambda: 'ready'), patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter(proxies)), \
              patch.object(i, 'deployment', lambda: {'status': 'available', 'release': 'synthetic'}):
             result = i.export(args, IDENTITY, None)
-        self.assertEqual(len(result['appAndAuditMatches']), 3)
+        self.assertEqual(len(result['appAndAuditMatches']), 4)
         self.assertEqual(result['procedureOutcomes'], [{'procedure':'dashboardDb.listing.create','status':'error','count':1}])
         self.assertFalse(result['correlationVerification']['missing'])
         self.assertEqual(result['sources']['proxyAccess']['status'], 'complete')
         self.assertIsNone(result['rowCountsNow'])
         self.assertNotIn('user_other', json.dumps(result))
+        self.assertNotIn('other_app_user', json.dumps(result))
+        self.assertTrue(any(row.get('appUserId') == 'explicit_other' and row['attribution'] == 'correlation'
+                            for row in result['appAndAuditMatches']))
 
     def test_identity_mismatch_fails_closed_and_counts_opt_in(self):
         args = argparse.Namespace(app_user_id='test_app_user', clerk_user_id='user_test_actor', row_counts=False)

@@ -168,7 +168,7 @@ def records_from_lines(lines, source):
                             all(isinstance(item, str) for item in value))
                        for value in request.get('headers', {}).values()):
                     raise ValueError('Expected string header values')
-                if type(record.get('status')) is not int or type(record.get('duration')) not in (int, float) or not math.isfinite(record['duration'] * 1000):
+                if type(record.get('status')) is not int or type(record.get('duration')) not in (int, float) or record['duration'] < 0 or not math.isfinite(record['duration'] * 1000):
                     raise ValueError('Expected numeric response fields')
             yield at, record
         except (ValueError, TypeError, KeyError, OverflowError, OSError):
@@ -432,7 +432,7 @@ def export(args, identity, row_counts):
             if not record:
                 continue
             cid = record.get('correlation_id')
-            if cid in blocked:
+            if cid in blocked or (other_actor(record, identity) and cid not in args.correlation_id):
                 continue
             actor = actor_matches(record, identity)
             exact = cid in confirmed or record.get('cf_ray') in rays
