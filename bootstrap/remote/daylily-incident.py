@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import zlib
 
 UTC = dt.timezone.utc
 CONTAINER = 'daylilycatalog-app-1'
@@ -131,6 +132,8 @@ def fingerprint(request):
 def records_from_lines(lines, source):
     for line in lines:
         try:
+            if isinstance(line, bytes):
+                line = line.decode('utf-8')
             raw = json.loads(line)
             if not isinstance(raw, dict):
                 raise ValueError('Expected an object')
@@ -168,7 +171,7 @@ def records_from_lines(lines, source):
 
 
 def command_lines(args):
-    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
         yield from process.stdout
         if process.wait() != 0:
@@ -202,21 +205,20 @@ def journal_configuration():
     return 'ready' if config.get('driver') == 'journald' and config.get('tag') == '{{.Name}}' else 'configuration-required'
 
 
-def proxy_files(directory):
+def proxy(directory):
     seen = set()
     for path in sorted(Path(directory).glob('access*.log*')):
-        stat = path.stat()
-        inode = (stat.st_dev, stat.st_ino)
-        if inode not in seen and path.is_file():
-            seen.add(inode)  # Compatibility symlink must not double-count the active log.
-            yield path
-
-
-def proxy(directory):
-    for path in proxy_files(directory):
-        opener = gzip.open if path.suffix == '.gz' else open
-        with opener(path, 'rt') as stream:
-            yield from records_from_lines(stream, 'proxy')
+        try:
+            stat = path.stat()
+            inode = (stat.st_dev, stat.st_ino)
+            if inode in seen or not path.is_file():
+                continue
+            seen.add(inode)  # Do not double-count compatibility symlinks.
+            opener = gzip.open if path.suffix == '.gz' else open
+            with opener(path, 'rb') as stream:
+                yield from records_from_lines(stream, 'proxy')
+        except (OSError, EOFError, zlib.error):
+            yield None, {'read_error': True}
 
 
 def coverage(oldest, newest, start, end, errors=0, malformed=0):
@@ -348,7 +350,10 @@ def export(args, identity, row_counts):
     try:
         for at, record in proxy('/srv/stacks/proxy/logs'):
             if at is None:
-                proxy_malformed += 1
+                if record is None:
+                    proxy_malformed += 1
+                else:
+                    proxy_errors += 1
                 continue
             proxy_oldest = min(proxy_oldest or at, at)
             proxy_newest = max(proxy_newest or at, at)

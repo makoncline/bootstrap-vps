@@ -158,6 +158,62 @@ class EvidenceTests(unittest.TestCase):
                 self.assertEqual(len(result['proxyMatches']), 2)
                 json.dumps(result, allow_nan=False)
 
+    def test_invalid_utf8_in_plain_and_gzip_logs_is_partial(self):
+        first = request('synthetic')
+        last = request('synthetic')
+        last['ts'] = END.timestamp()
+        payload = json.dumps(first).encode() + b'\n\xff\n' + json.dumps(last).encode() + b'\n'
+        original_proxy = i.proxy
+        args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
+        for compressed in (False, True):
+            with self.subTest(compressed=compressed), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / ('access-test-size.log.gz' if compressed else 'access.log')
+                if compressed:
+                    with gzip.open(path, 'wb') as stream:
+                        stream.write(payload)
+                else:
+                    path.write_bytes(payload)
+                with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                     patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
+                     patch.object(i, 'proxy', lambda _: original_proxy(directory)), \
+                     patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
+                    result = i.export(args, {}, None)
+                self.assertEqual(result['sources']['proxyAccess']['status'], 'partial')
+                self.assertEqual(result['sources']['proxyAccess']['malformed_records'], 1)
+                self.assertEqual(len(result['proxyMatches']), 2)
+                output = Path(directory) / 'evidence.json'
+                i.write_private(output, result)
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(len(json.loads(output.read_text())['proxyMatches']), 2)
+
+    def test_gzip_read_errors_preserve_matches_before_and_after(self):
+        first = request('synthetic', 'ray_before')
+        last = request('synthetic', 'ray_after')
+        last['ts'] = END.timestamp()
+        encoded = gzip.compress(json.dumps(first).encode() + b'\n')
+        corrupt = bytearray(encoded)
+        corrupt[10] = 0xff  # Invalid deflate block type produces zlib.error.
+        original_proxy = i.proxy
+        args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
+        for damaged in (encoded[:-8], bytes(corrupt)):
+            with self.subTest(damaged=damaged[:12]), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'access-01.log').write_text(json.dumps(first) + '\n')
+                (root / 'access-02-size.log.gz').write_bytes(damaged)
+                (root / 'access-03.log').write_text(json.dumps(last) + '\n')
+                with patch.object(i, 'journal_configuration', lambda: 'ready'), \
+                     patch.object(i, 'journal', lambda *a, **kw: (row for row in ())), \
+                     patch.object(i, 'proxy', lambda _: original_proxy(directory)), \
+                     patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
+                    result = i.export(args, {}, None)
+                self.assertEqual(result['sources']['proxyAccess']['status'], 'partial')
+                self.assertEqual(result['sources']['proxyAccess']['read_errors'], 1)
+                self.assertTrue({'ray_before', 'ray_after'} <= {r['cf_ray'] for r in result['proxyMatches']})
+                output = root / 'evidence.json'
+                i.write_private(output, result)
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(json.loads(output.read_text())['sources']['proxyAccess']['read_errors'], 1)
+
     def test_private_output_never_overwrites(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory)/'evidence.json'
