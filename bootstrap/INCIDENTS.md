@@ -7,6 +7,22 @@
 sudo install -m 755 bootstrap/remote/daylily-incident.py /usr/local/bin/daylily-incident
 ```
 
+The Daylily service must explicitly use journald with its container-name tag:
+
+```yaml
+logging:
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+```
+
+This belongs to the app-owned `apps/main/deploy/vps/compose.yaml`, not Docker's
+global defaults. The CLI checks the running container's driver/tag and reports
+`configuration-required` with unavailable app coverage if they do not match.
+It reads the retained journal across container replacements, preserving this
+host's existing 14-day journal policy. It does not fall back to current-container
+Docker logs or change any logging configuration.
+
 Run with authorized journal, proxy-log and Docker access. Supply an explicit UTC
 interval of at most 14 days and an app User ID, Clerk user ID, or correlation ID:
 

@@ -176,6 +176,19 @@ def journal(start=None, end=None, limit=None):
     yield from records_from_lines(command_lines(args), 'app')
 
 
+def journal_configuration():
+    template = '{"driver":{{json .HostConfig.LogConfig.Type}},"tag":{{json (index .HostConfig.LogConfig.Config "tag")}}}'
+    try:
+        result = subprocess.run(['docker', 'inspect', CONTAINER, '--format', template],
+                                text=True, capture_output=True, timeout=15)
+        if result.returncode:
+            return 'unavailable'
+        config = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return 'unavailable'
+    return 'ready' if config.get('driver') == 'journald' and config.get('tag') == '{{.Name}}' else 'configuration-required'
+
+
 def proxy_files(directory):
     seen = set()
     for path in sorted(Path(directory).glob('access*.log*')):
@@ -287,7 +300,10 @@ def export(args, identity, row_counts):
     confirmed, blocked, rays = set(args.correlation_id), set(), set()
     app_errors = malformed = legacy = 0
     oldest = newest = None
+    app_configuration = journal_configuration()
     try:
+        if app_configuration != 'ready':
+            raise OSError('Required journald configuration is unavailable')
         stream = journal()
         try:
             oldest, _ = next(stream, (None, None))
@@ -347,7 +363,7 @@ def export(args, identity, row_counts):
         proxy_errors += 1
     matches = []
     try:
-        for at, record in journal(args.start, args.end):
+        for at, record in journal(args.start, args.end) if app_configuration == 'ready' else ():
             if not record:
                 continue
             cid = record.get('correlation_id')
@@ -370,7 +386,9 @@ def export(args, identity, row_counts):
             'correlationVerification': {cid: any(r.get('correlation_id') == cid for r in matches + proxy_matches)
                                         for cid in args.correlation_id},
             'deploymentNow': deployment(), 'rowCountsNow': row_counts,
-            'sources': {'appAndAudit': {**coverage(oldest, newest, args.start, args.end, app_errors, malformed), 'unstructuredRecordsOmitted': legacy},
+            'sources': {'appAndAudit': {**coverage(oldest, newest, args.start, args.end, app_errors, malformed), 'unstructuredRecordsOmitted': legacy,
+                                                'configuration': app_configuration,
+                                                'requirement': 'journald driver with tag {{.Name}}; retained journal covers container replacements'},
                         'proxyAccess': coverage(proxy_oldest, proxy_newest, args.start, args.end, proxy_errors, proxy_malformed)},
             'procedureOutcomes': [{'procedure': key[0], 'status': key[1], 'count': count} for key, count in sorted(outcomes.items(), key=lambda item: str(item[0]))],
             'appAndAuditMatches': matches, 'proxyMatches': proxy_matches,

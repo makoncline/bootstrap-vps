@@ -105,13 +105,25 @@ class EvidenceTests(unittest.TestCase):
             lines = window if start else [line('Server ready', END if limit else START)]
             yield from i.records_from_lines(lines, 'app')
         args = argparse.Namespace(start=START, end=END, correlation_id=[], infer_client=False)
-        with patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter([])), \
+        with patch.object(i, 'journal_configuration', lambda: 'ready'), patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter([])), \
              patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
             result = i.export(args, IDENTITY, None)
         source = result['sources']['appAndAudit']
         self.assertEqual(source['status'], 'partial')
         self.assertEqual(source['malformed_records'], 1)
         self.assertEqual(source['unstructuredRecordsOmitted'], 1)
+        self.assertEqual(result['appAndAuditMatches'], [])
+
+    def test_non_journald_backend_reports_configuration_required(self):
+        response = subprocess.CompletedProcess([], 0, '{"driver":"json-file","tag":null}', '')
+        args = argparse.Namespace(start=START, end=END, correlation_id=['synthetic'], infer_client=False)
+        with patch.object(i.subprocess, 'run', return_value=response), \
+             patch.object(i, 'journal', side_effect=AssertionError('Must not read an unsupported journal source')), \
+             patch.object(i, 'proxy', lambda _: iter([])), \
+             patch.object(i, 'deployment', lambda: {'status': 'unavailable'}):
+            result = i.export(args, {}, None)
+        self.assertEqual(result['sources']['appAndAudit']['status'], 'unavailable')
+        self.assertEqual(result['sources']['appAndAudit']['configuration'], 'configuration-required')
         self.assertEqual(result['appAndAuditMatches'], [])
 
     def test_private_output_never_overwrites(self):
@@ -139,7 +151,7 @@ class EvidenceTests(unittest.TestCase):
             yield from ([(START, {})] if start is None and not limit else [(END, {})] if limit else app)
         proxies = [(START,request('exact')), (START,request('inferred','ray_inferred')),
                    (START,request('known_other','ray_other')), (END,request('not_selected','ray_end'))]
-        with patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter(proxies)), \
+        with patch.object(i, 'journal_configuration', lambda: 'ready'), patch.object(i, 'journal', journal), patch.object(i, 'proxy', lambda _: iter(proxies)), \
              patch.object(i, 'deployment', lambda: {'status': 'available', 'release': 'synthetic'}):
             result = i.export(args, IDENTITY, None)
         self.assertEqual(len(result['appAndAuditMatches']), 3)
