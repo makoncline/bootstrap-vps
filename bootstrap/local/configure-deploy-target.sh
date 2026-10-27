@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: bootstrap/local/configure-deploy-target.sh <env-file> <target> <stack-dir> <smoke-url>
 
-Create or update a named deploy target on an already-bootstrapped host over Tailscale SSH.
+Create or update a named deploy target on an already-bootstrapped host over OpenSSH over Tailscale.
 
 Optional environment overrides:
   ADMIN_USER=makon

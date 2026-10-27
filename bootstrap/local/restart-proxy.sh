@@ -12,7 +12,7 @@ usage() {
 Usage: bootstrap/local/restart-proxy.sh <env-file>
 
 Restart the managed Caddy proxy stack on an already-bootstrapped host over
-Tailscale SSH so new route files under /srv/stacks/proxy/sites take effect.
+OpenSSH over Tailscale so new route files under /srv/stacks/proxy/sites take effect.
 EOF
 }
 

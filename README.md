@@ -2,7 +2,7 @@
 
 Bootstrap for a fresh Hetzner Ubuntu 24.04 VPS using:
 
-- Tailscale SSH for admin access
+- OpenSSH over Tailscale for admin access
 - Docker Compose for app stacks
 - Caddy as the internal reverse proxy
 - Cloudflare Tunnel for public ingress
@@ -16,7 +16,7 @@ Bootstrap for a fresh Hetzner Ubuntu 24.04 VPS using:
 
 ## What it does
 
-The bootstrap starts from temporary public `root` SSH, installs the base server, applies Ubuntu package upgrades, performs one automatic reboot if the host requires it, joins Tailscale, brings up `cloudflared`, Caddy, and a sample app, verifies Tailscale SSH from this Mac, then disables public SSH.
+The bootstrap starts from temporary public `root` SSH, installs the base server, applies Ubuntu package upgrades, performs one automatic reboot if the host requires it, joins Tailscale, brings up `cloudflared`, Caddy, and a sample app, verifies OpenSSH over Tailscale from this Mac, then disables public SSH.
 
 ## Main commands
 

@@ -9,7 +9,7 @@ Use this when you need to manually walk a fresh Hetzner Ubuntu 24.04 server thro
 5. From this Mac, verify `ssh makon@<TAILSCALE_HOSTNAME>` works over Tailscale.
 6. Run the Cloudflare helper or otherwise sync the tunnel ingress config and create proxied `CNAME` records to `<TUNNEL_ID>.cfargotunnel.com` for every hostname in `TUNNEL_HOSTNAMES`.
 7. Run `/root/bootstrap-bundle/remote/lockdown-ssh.sh /root/bootstrap-bundle/host.env`.
-8. Over Tailscale SSH, run `codex login --device-auth` on the server and complete the first interactive sign-in flow.
+8. Over OpenSSH over Tailscale, run `codex login --device-auth` on the server and complete the first interactive sign-in flow.
 9. Confirm `~/.codex/skills/server-new-app/SKILL.md` and `~/.codex/skills/server-state-audit/SKILL.md` exist for the server operator user.
 10. Confirm `unattended-upgrades` is installed, `/etc/docker/daemon.json` has log rotation, and `systemctl status bootstrap-healthcheck.timer` is healthy.
 11. If Telegram credentials were provided, run `notify "[<HOSTNAME>] telegram test"` as the admin user and confirm the message arrives.

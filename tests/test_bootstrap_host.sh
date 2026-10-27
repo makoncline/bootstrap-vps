@@ -21,7 +21,10 @@ case "$*" in
   *"tar -xzf - -C '/root/bootstrap-bundle'"*) cat >/dev/null ;;
 esac
 case "$*" in
-  *"root@5.78.181.31"*"init-host.sh"*)
+  *"admin@server-example"*"tailscale debug prefs"*)
+    [ "${TEST_FAIL_VERIFY:-0}" = 0 ] || exit 1
+    ;;
+  *"root@192.0.2.10"*"init-host.sh"*)
     count_file="$state_dir/init-count"
     count=0
     if [ -f "$count_file" ]; then
@@ -34,11 +37,11 @@ case "$*" in
     fi
     exit 0
     ;;
-  *"root@5.78.181.31 nohup sh -c 'sleep 2; reboot' >/dev/null 2>&1 &"*)
+  *"root@192.0.2.10 nohup sh -c 'sleep 2; reboot' >/dev/null 2>&1 &"*)
     : >"$state_dir/reboot-pending"
     exit 0
     ;;
-  *"root@5.78.181.31 true"*)
+  *"root@192.0.2.10 true"*)
     if [ -f "$state_dir/reboot-pending" ]; then
       rm -f "$state_dir/reboot-pending"
       : >"$state_dir/reboot-complete"
@@ -49,13 +52,13 @@ case "$*" in
     fi
     exit 0
     ;;
-  *"makon@5.78.181.31 true"*)
+  *"admin@192.0.2.10 true"*)
     if [ -f "$state_dir/lockdown-seen" ]; then
       exit 255
     fi
     exit 0
     ;;
-  *"root@5.78.181.31"*"lockdown-ssh.sh"*)
+  *"root@192.0.2.10"*"lockdown-ssh.sh"*)
     : >"$state_dir/lockdown-seen"
     exit 0
     ;;
@@ -79,29 +82,29 @@ EOF
 chmod +x "$BIN_DIR/scp"
 
 cat >"$TMP_DIR/good.env" <<'EOF'
-HOST_PUBLIC_IPV4=5.78.181.31
-HOSTNAME=makon-dev-0
+HOST_PUBLIC_IPV4=192.0.2.10
+HOSTNAME=server-example
 TAILSCALE_AUTHKEY=tskey-test
-TAILSCALE_HOSTNAME=makon-dev-0
+TAILSCALE_HOSTNAME=server-example
 TUNNEL_TOKEN=tunnel-token
 TUNNEL_ID=11111111-2222-3333-4444-555555555555
-SMOKE_HOSTNAME=whoami.makon.dev
-TUNNEL_HOSTNAMES=*.makon.dev,*.daylilycatalog.com
+SMOKE_HOSTNAME=whoami.example.com
+TUNNEL_HOSTNAMES=*.example.com
 TELEGRAM_BOT_TOKEN=telegram-token
 TELEGRAM_CHAT_ID=123456
 HEALTHCHECK_DISK_PCT=90
-DEPLOY_WEBHOOK_HOSTNAME=deploy.makon.dev
+DEPLOY_WEBHOOK_HOSTNAME=deploy.example.com
 DEPLOY_WEBHOOK_TOKEN=deploy-token
 EOF
 
 cat >"$TMP_DIR/bad.env" <<'EOF'
-HOST_PUBLIC_IPV4=5.78.181.31
-HOSTNAME=makon-dev-0
-TAILSCALE_HOSTNAME=makon-dev-0
+HOST_PUBLIC_IPV4=192.0.2.10
+HOSTNAME=server-example
+TAILSCALE_HOSTNAME=server-example
 TUNNEL_TOKEN=tunnel-token
 TUNNEL_ID=11111111-2222-3333-4444-555555555555
-SMOKE_HOSTNAME=whoami.makon.dev
-TUNNEL_HOSTNAMES=*.makon.dev,*.daylilycatalog.com
+SMOKE_HOSTNAME=whoami.example.com
+TUNNEL_HOSTNAMES=*.example.com
 EOF
 
 set +e
@@ -109,6 +112,7 @@ output=$(
   PATH="$BIN_DIR:$PATH" \
   TEST_SSH_LOG="$LOG_FILE" \
   BOOTSTRAP_SSH_KEY="$TMP_DIR/testkey" \
+  ADMIN_USER=admin \
   BOOTSTRAP_SKIP_CLOUDFLARE=1 \
   BOOTSTRAP_SKIP_SMOKE_CHECK=1 \
   "$REPO_ROOT/bootstrap/local/bootstrap-host.sh" "$TMP_DIR/bad.env" 2>&1
@@ -127,17 +131,28 @@ TEST_STATE_DIR="$TMP_DIR/state" \
 TEST_SCP_CAPTURE_DIR="$TMP_DIR/captured" \
 TEST_TRIGGER_REBOOT=1 \
 BOOTSTRAP_SSH_KEY="$TMP_DIR/testkey" \
+  ADMIN_USER=admin \
 BOOTSTRAP_SKIP_CLOUDFLARE=1 \
 BOOTSTRAP_SKIP_SMOKE_CHECK=1 \
 "$REPO_ROOT/bootstrap/local/bootstrap-host.sh" "$TMP_DIR/good.env"
 
-grep -c 'root@5.78.181.31 .*init-host.sh' "$LOG_FILE" | grep -q '^2$'
-grep -q "root@5.78.181.31 nohup sh -c 'sleep 2; reboot' >/dev/null 2>&1 &" "$LOG_FILE"
-grep -q 'root@5.78.181.31 .*init-host.sh' "$LOG_FILE"
-grep -q 'makon@makon-dev-0 hostname >/dev/null' "$LOG_FILE"
-grep -q 'root@5.78.181.31 .*lockdown-ssh.sh' "$LOG_FILE"
+grep -c 'root@192.0.2.10 .*init-host.sh' "$LOG_FILE" | grep -q '^2$'
+grep -q "root@192.0.2.10 nohup sh -c 'sleep 2; reboot' >/dev/null 2>&1 &" "$LOG_FILE"
+grep -q 'root@192.0.2.10 .*init-host.sh' "$LOG_FILE"
+grep -q 'admin@server-example sudo -n tailscale debug prefs' "$LOG_FILE"
+grep -q 'root@192.0.2.10 .*lockdown-ssh.sh' "$LOG_FILE"
 grep -q 'TELEGRAM_BOT_TOKEN=telegram-token' "$TMP_DIR/captured/host.env"
 grep -q 'TELEGRAM_CHAT_ID=123456' "$TMP_DIR/captured/host.env"
 grep -q 'HEALTHCHECK_DISK_PCT=90' "$TMP_DIR/captured/host.env"
-grep -q 'DEPLOY_WEBHOOK_HOSTNAME=deploy.makon.dev' "$TMP_DIR/captured/host.env"
+grep -q 'DEPLOY_WEBHOOK_HOSTNAME=deploy.example.com' "$TMP_DIR/captured/host.env"
 grep -q 'DEPLOY_WEBHOOK_TOKEN=deploy-token' "$TMP_DIR/captured/host.env"
+
+rm -f "$LOG_FILE"
+if PATH="$BIN_DIR:$PATH" TEST_SSH_LOG="$LOG_FILE" TEST_STATE_DIR="$TMP_DIR/state" \
+  TEST_FAIL_VERIFY=1 ADMIN_USER=admin BOOTSTRAP_SSH_KEY="$TMP_DIR/testkey" \
+  BOOTSTRAP_SKIP_CLOUDFLARE=1 BOOTSTRAP_SKIP_SMOKE_CHECK=1 \
+  "$REPO_ROOT/bootstrap/local/bootstrap-host.sh" "$TMP_DIR/good.env"; then
+  printf 'expected access verification failure\n' >&2
+  exit 1
+fi
+! grep -q 'lockdown-ssh.sh' "$LOG_FILE"

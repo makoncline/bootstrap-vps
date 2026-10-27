@@ -38,6 +38,11 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes
 EOF
+sshd -t
+config=$(sshd -T)
+for setting in 'permitrootlogin no' 'passwordauthentication no' 'kbdinteractiveauthentication no' 'pubkeyauthentication yes' 'allowagentforwarding no'; do
+  printf '%s\n' "$config" | grep -Fxq "$setting" || fail "SSH configuration does not enforce: $setting"
+done
 restart_ssh_service
 
 log "Applying firewall rules"
