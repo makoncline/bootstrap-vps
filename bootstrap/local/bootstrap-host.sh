@@ -30,7 +30,6 @@ ssh_cmd() {
     -i "$BOOTSTRAP_SSH_KEY" \
     -o IdentitiesOnly=yes \
     -o PreferredAuthentications=publickey \
-    -o ControlMaster=no \
     -o ForwardAgent=no \
     -o BatchMode=yes \
     -o ConnectTimeout=10 \
@@ -180,7 +179,6 @@ append_env DEPLOY_WEBHOOK_TOKEN "${DEPLOY_WEBHOOK_TOKEN:-}"
 }
 
 ENV_FILE=$1
-BOOTSTRAP_SSH_KEY=${BOOTSTRAP_SSH_KEY:-}
 BOOTSTRAP_SKIP_CLOUDFLARE=${BOOTSTRAP_SKIP_CLOUDFLARE:-0}
 BOOTSTRAP_SKIP_SMOKE_CHECK=${BOOTSTRAP_SKIP_SMOKE_CHECK:-0}
 BOOTSTRAP_SKIP_LOCKDOWN=${BOOTSTRAP_SKIP_LOCKDOWN:-0}

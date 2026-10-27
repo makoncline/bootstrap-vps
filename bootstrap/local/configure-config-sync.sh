@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: bootstrap/local/configure-config-sync.sh <env-file> <target> <repo-url> <config-subdir> <stack-dir> <smoke-url>
 
-Create or update a named config-sync target on an already-bootstrapped host over OpenSSH over Tailscale.
+Create or update a named config-sync target on an already-bootstrapped host with OpenSSH over Tailscale.
 
 Optional environment overrides:
   ADMIN_USER=makon

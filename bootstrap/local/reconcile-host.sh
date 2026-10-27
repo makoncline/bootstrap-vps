@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: bootstrap/local/reconcile-host.sh <env-file>
 
-Push the current remote bootstrap bundle to an already-bootstrapped host over OpenSSH over Tailscale
+Push the current remote bootstrap bundle to an already-bootstrapped host with OpenSSH over Tailscale
 and rerun the idempotent remote converger there.
 
 Environment toggles:
@@ -30,7 +30,6 @@ ssh_cmd() {
     -i "$BOOTSTRAP_SSH_KEY" \
     -o IdentitiesOnly=yes \
     -o PreferredAuthentications=publickey \
-    -o ControlMaster=no \
     -o ForwardAgent=no \
     -o BatchMode=yes \
     -o ConnectTimeout=10 \
@@ -53,7 +52,7 @@ copy_bundle() {
   cat "$RUNTIME_ENV_FILE" | ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "cat > '$REMOTE_DIR/host.env'"
 }
 
-wait_for_tailscale_ssh_unavailable() {
+wait_for_admin_ssh_unavailable() {
   local attempts
   attempts=24
   log "Waiting for $TAILSCALE_HOSTNAME to stop accepting OpenSSH over Tailscale"
@@ -67,7 +66,7 @@ wait_for_tailscale_ssh_unavailable() {
   fail "Timed out waiting for OpenSSH over Tailscale to drop on $TAILSCALE_HOSTNAME"
 }
 
-wait_for_tailscale_ssh_available() {
+wait_for_admin_ssh_available() {
   local attempts
   attempts=36
   log "Waiting for $TAILSCALE_HOSTNAME to accept OpenSSH over Tailscale again"
@@ -137,7 +136,6 @@ write_runtime_env_file() {
 }
 
 ENV_FILE=$1
-BOOTSTRAP_SSH_KEY=${BOOTSTRAP_SSH_KEY:-}
 ADMIN_USER=${ADMIN_USER:-admin}
 REMOTE_DIR=${BOOTSTRAP_REMOTE_DIR:-/home/$ADMIN_USER/.cache/bootstrap-bundle}
 
@@ -176,8 +174,8 @@ status=$?
 set -e
 if [ "$status" -eq "$REMOTE_INIT_REBOOT_REQUIRED_EXIT" ]; then
   request_remote_reboot
-  wait_for_tailscale_ssh_unavailable
-  wait_for_tailscale_ssh_available
+  wait_for_admin_ssh_unavailable
+  wait_for_admin_ssh_available
 
   BOOTSTRAP_POST_REBOOT=1
   write_runtime_env_file

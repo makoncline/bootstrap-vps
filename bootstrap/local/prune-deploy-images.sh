@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: bootstrap/local/prune-deploy-images.sh <env-file> <target> [keep-count]
 
-Run the managed server-side image retention helper over OpenSSH over Tailscale.
+Run the managed server-side image retention helper with OpenSSH over Tailscale.
 If keep-count is omitted, the target's configured KEEP_IMAGE_COUNT is used.
 EOF
 }

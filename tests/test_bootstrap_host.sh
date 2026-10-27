@@ -131,7 +131,7 @@ TEST_STATE_DIR="$TMP_DIR/state" \
 TEST_SCP_CAPTURE_DIR="$TMP_DIR/captured" \
 TEST_TRIGGER_REBOOT=1 \
 BOOTSTRAP_SSH_KEY="$TMP_DIR/testkey" \
-  ADMIN_USER=admin \
+ADMIN_USER=admin \
 BOOTSTRAP_SKIP_CLOUDFLARE=1 \
 BOOTSTRAP_SKIP_SMOKE_CHECK=1 \
 "$REPO_ROOT/bootstrap/local/bootstrap-host.sh" "$TMP_DIR/good.env"

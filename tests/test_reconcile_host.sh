@@ -46,7 +46,7 @@ PATH="$BIN_DIR:$PATH" \
 TEST_SSH_LOG="$LOG_FILE" \
 TEST_CAPTURE_DIR="$TMP_DIR/captured" \
 BOOTSTRAP_SSH_KEY="$TMP_DIR/testkey" \
-  ADMIN_USER=admin \
+ADMIN_USER=admin \
 "$REPO_ROOT/bootstrap/local/reconcile-host.sh" "$TMP_DIR/good.env"
 
 grep -q 'admin@server-example .*init-host.sh' "$LOG_FILE"

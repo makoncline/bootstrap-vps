@@ -28,3 +28,9 @@ ensure_admin_user
 ensure_admin_user
 printf '%s\n' "$ADMIN_SSH_PUBKEY" >> "$TMP/expected"
 cmp "$keys" "$TMP/expected"
+
+printf '%s' 'ssh-ed25519 AAAAother other' > "$keys"
+cp "$keys" "$TMP/expected"
+ensure_admin_user
+printf '\n%s\n' "$ADMIN_SSH_PUBKEY" >> "$TMP/expected"
+cmp "$keys" "$TMP/expected"

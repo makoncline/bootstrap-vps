@@ -39,22 +39,26 @@ ensure_hostname() {
 }
 
 ensure_admin_user() {
+  local key_file key_type key_data
   if ! id "$ADMIN_USER" >/dev/null 2>&1; then
     useradd --create-home --shell /bin/bash --groups sudo "$ADMIN_USER"
   fi
   install -d -m 700 -o "$ADMIN_USER" -g "$ADMIN_USER" "/home/$ADMIN_USER/.ssh"
-  local key_file key_type key_data
   key_file="/home/$ADMIN_USER/.ssh/authorized_keys"
   read -r key_type key_data _ <<<"$ADMIN_SSH_PUBKEY"
   [ -n "$key_type" ] && [ -n "$key_data" ] || fail "Invalid admin public key"
   touch "$key_file"
   if ! awk -v type="$key_type" -v key="$key_data" \
-    '$1 !~ /^#/ { for (i = 1; i < NF; i++) if ($i == type && $(i+1) == key) found = 1 } END { exit !found }' "$key_file"; then
-    [ ! -s "$key_file" ] || [ "$(tail -c 1 "$key_file" | wc -l | tr -d ' ')" = 1 ] || printf '\n' >>"$key_file"
+    '$1 !~ /^#/ {
+      for (i = 1; i < NF; i++)
+        if ($i == type && $(i+1) == key) found = 1
+    }
+    END { exit !found }' "$key_file"; then
+    [ -z "$(tail -c 1 "$key_file")" ] || printf '\n' >>"$key_file"
     printf '%s\n' "$ADMIN_SSH_PUBKEY" >>"$key_file"
   fi
-  chown "$ADMIN_USER:$ADMIN_USER" "/home/$ADMIN_USER/.ssh/authorized_keys"
-  chmod 600 "/home/$ADMIN_USER/.ssh/authorized_keys"
+  chown "$ADMIN_USER:$ADMIN_USER" "$key_file"
+  chmod 600 "$key_file"
   usermod -aG docker "$ADMIN_USER" 2>/dev/null || true
   write_if_changed "/etc/sudoers.d/90-$ADMIN_USER-nopasswd" <<EOF
 $ADMIN_USER ALL=(ALL) NOPASSWD:ALL
