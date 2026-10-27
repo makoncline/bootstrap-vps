@@ -11,8 +11,8 @@ usage() {
   cat <<'EOF'
 Usage: bootstrap/local/restart-proxy.sh <env-file>
 
-Restart the managed Caddy proxy stack on an already-bootstrapped host over
-Tailscale SSH so new route files under /srv/stacks/proxy/sites take effect.
+Restart the managed Caddy proxy stack on an already-bootstrapped host with
+OpenSSH over Tailscale so new route files under /srv/stacks/proxy/sites take effect.
 EOF
 }
 
@@ -22,10 +22,10 @@ EOF
 }
 
 ENV_FILE=$1
-ADMIN_USER=${ADMIN_USER:-makon}
 
 require_command ssh
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
 require_var TAILSCALE_HOSTNAME
 
 ssh \

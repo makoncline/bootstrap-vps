@@ -26,11 +26,14 @@ ssh_cmd() {
   target=$1
   shift
   ssh \
+    -F /dev/null \
     -i "$BOOTSTRAP_SSH_KEY" \
+    -o IdentitiesOnly=yes \
+    -o PreferredAuthentications=publickey \
+    -o ForwardAgent=no \
     -o BatchMode=yes \
     -o ConnectTimeout=10 \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
+    -o StrictHostKeyChecking=accept-new \
     "$target" "$@"
 }
 
@@ -39,8 +42,7 @@ scp_cmd() {
     -i "$BOOTSTRAP_SSH_KEY" \
     -o BatchMode=yes \
     -o ConnectTimeout=10 \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
+    -o StrictHostKeyChecking=accept-new \
     "$@"
 }
 
@@ -111,8 +113,8 @@ request_remote_reboot() {
 }
 
 verify_tailscale_access() {
-  log "Verifying Tailscale SSH for $ADMIN_USER@$TAILSCALE_HOSTNAME"
-  ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "hostname >/dev/null"
+  log "Verifying OpenSSH over Tailscale for $ADMIN_USER@$TAILSCALE_HOSTNAME"
+  ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "sudo -n tailscale debug prefs | jq -e '.RunSSH == false' >/dev/null"
 }
 
 expect_public_ssh_closed() {
@@ -177,18 +179,18 @@ append_env DEPLOY_WEBHOOK_TOKEN "${DEPLOY_WEBHOOK_TOKEN:-}"
 }
 
 ENV_FILE=$1
-BOOTSTRAP_SSH_KEY=${BOOTSTRAP_SSH_KEY:-/Users/makon/.ssh/makon_admin_ed25519}
 BOOTSTRAP_SKIP_CLOUDFLARE=${BOOTSTRAP_SKIP_CLOUDFLARE:-0}
 BOOTSTRAP_SKIP_SMOKE_CHECK=${BOOTSTRAP_SKIP_SMOKE_CHECK:-0}
 BOOTSTRAP_SKIP_LOCKDOWN=${BOOTSTRAP_SKIP_LOCKDOWN:-0}
 REMOTE_DIR=${BOOTSTRAP_REMOTE_DIR:-/root/bootstrap-bundle}
-ADMIN_USER=${ADMIN_USER:-makon}
 
+require_var BOOTSTRAP_SSH_KEY
 require_command ssh
 require_command scp
 require_command tar
 require_command curl
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
 require_var HOSTNAME
 require_var TAILSCALE_AUTHKEY
 require_var TAILSCALE_HOSTNAME

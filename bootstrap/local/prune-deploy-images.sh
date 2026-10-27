@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: bootstrap/local/prune-deploy-images.sh <env-file> <target> [keep-count]
 
-Run the managed server-side image retention helper over Tailscale SSH.
+Run the managed server-side image retention helper with OpenSSH over Tailscale.
 If keep-count is omitted, the target's configured KEEP_IMAGE_COUNT is used.
 EOF
 }
@@ -24,10 +24,10 @@ EOF
 ENV_FILE=$1
 TARGET=$2
 KEEP_COUNT=${3:-}
-ADMIN_USER=${ADMIN_USER:-makon}
 
 require_command ssh
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
 require_var TAILSCALE_HOSTNAME
 
 case "$TARGET" in

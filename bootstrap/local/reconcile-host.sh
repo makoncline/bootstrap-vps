@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: bootstrap/local/reconcile-host.sh <env-file>
 
-Push the current remote bootstrap bundle to an already-bootstrapped host over Tailscale SSH
+Push the current remote bootstrap bundle to an already-bootstrapped host with OpenSSH over Tailscale
 and rerun the idempotent remote converger there.
 
 Environment toggles:
@@ -26,10 +26,14 @@ ssh_cmd() {
   target=$1
   shift
   ssh \
+    -F /dev/null \
+    -i "$BOOTSTRAP_SSH_KEY" \
+    -o IdentitiesOnly=yes \
+    -o PreferredAuthentications=publickey \
+    -o ForwardAgent=no \
     -o BatchMode=yes \
     -o ConnectTimeout=10 \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
+    -o StrictHostKeyChecking=accept-new \
     "$target" "$@"
 }
 
@@ -48,10 +52,10 @@ copy_bundle() {
   cat "$RUNTIME_ENV_FILE" | ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "cat > '$REMOTE_DIR/host.env'"
 }
 
-wait_for_tailscale_ssh_unavailable() {
+wait_for_admin_ssh_unavailable() {
   local attempts
   attempts=24
-  log "Waiting for $TAILSCALE_HOSTNAME to stop accepting Tailscale SSH"
+  log "Waiting for $TAILSCALE_HOSTNAME to stop accepting OpenSSH over Tailscale"
   while [ "$attempts" -gt 0 ]; do
     if ! ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "true" >/dev/null 2>&1; then
       return 0
@@ -59,13 +63,13 @@ wait_for_tailscale_ssh_unavailable() {
     attempts=$((attempts - 1))
     sleep 5
   done
-  fail "Timed out waiting for Tailscale SSH to drop on $TAILSCALE_HOSTNAME"
+  fail "Timed out waiting for OpenSSH over Tailscale to drop on $TAILSCALE_HOSTNAME"
 }
 
-wait_for_tailscale_ssh_available() {
+wait_for_admin_ssh_available() {
   local attempts
   attempts=36
-  log "Waiting for $TAILSCALE_HOSTNAME to accept Tailscale SSH again"
+  log "Waiting for $TAILSCALE_HOSTNAME to accept OpenSSH over Tailscale again"
   while [ "$attempts" -gt 0 ]; do
     if ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "true" >/dev/null 2>&1; then
       return 0
@@ -73,7 +77,7 @@ wait_for_tailscale_ssh_available() {
     attempts=$((attempts - 1))
     sleep 5
   done
-  fail "Timed out waiting for Tailscale SSH to return on $TAILSCALE_HOSTNAME"
+  fail "Timed out waiting for OpenSSH over Tailscale to return on $TAILSCALE_HOSTNAME"
 }
 
 run_remote_init() {
@@ -132,13 +136,13 @@ write_runtime_env_file() {
 }
 
 ENV_FILE=$1
-BOOTSTRAP_SSH_KEY=${BOOTSTRAP_SSH_KEY:-/Users/makon/.ssh/makon_admin_ed25519}
-ADMIN_USER=${ADMIN_USER:-makon}
-REMOTE_DIR=${BOOTSTRAP_REMOTE_DIR:-/home/$ADMIN_USER/.cache/bootstrap-bundle}
 
+require_var BOOTSTRAP_SSH_KEY
 require_command ssh
 require_command tar
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
+REMOTE_DIR=${BOOTSTRAP_REMOTE_DIR:-/home/$ADMIN_USER/.cache/bootstrap-bundle}
 require_var HOSTNAME
 require_var TAILSCALE_AUTHKEY
 require_var TAILSCALE_HOSTNAME
@@ -147,6 +151,7 @@ require_var TUNNEL_HOSTNAMES
 require_var SMOKE_HOSTNAME
 [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] || [ -z "${DEPLOY_WEBHOOK_TOKEN:-}" ] || fail "DEPLOY_WEBHOOK_TOKEN requires DEPLOY_WEBHOOK_HOSTNAME"
 [ -n "${DEPLOY_WEBHOOK_TOKEN:-}" ] || [ -z "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] || fail "DEPLOY_WEBHOOK_HOSTNAME requires DEPLOY_WEBHOOK_TOKEN"
+[ -f "$BOOTSTRAP_SSH_KEY" ] || fail "SSH private key not found: $BOOTSTRAP_SSH_KEY"
 [ -f "${BOOTSTRAP_SSH_KEY}.pub" ] || fail "SSH public key not found: ${BOOTSTRAP_SSH_KEY}.pub"
 
 ADMIN_SSH_PUBKEY=$(cat "${BOOTSTRAP_SSH_KEY}.pub")
@@ -154,6 +159,9 @@ ADMIN_SSH_PUBKEY=$(cat "${BOOTSTRAP_SSH_KEY}.pub")
 WORK_DIR=$(mktemp -d)
 RUNTIME_ENV_FILE=$WORK_DIR/host.env
 trap 'rm -rf "$WORK_DIR"' EXIT
+
+log "Checking OpenSSH access and Tailscale SSH state"
+ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "sudo -n tailscale debug prefs | jq -e '.RunSSH == false' >/dev/null" || fail "OpenSSH access or Tailscale SSH state check failed; see the existing-host transition instructions"
 
 BOOTSTRAP_POST_REBOOT=0
 write_runtime_env_file
@@ -166,8 +174,8 @@ status=$?
 set -e
 if [ "$status" -eq "$REMOTE_INIT_REBOOT_REQUIRED_EXIT" ]; then
   request_remote_reboot
-  wait_for_tailscale_ssh_unavailable
-  wait_for_tailscale_ssh_available
+  wait_for_admin_ssh_unavailable
+  wait_for_admin_ssh_available
 
   BOOTSTRAP_POST_REBOOT=1
   write_runtime_env_file

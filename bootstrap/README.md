@@ -1,19 +1,19 @@
 # Bootstrap Details
 
-This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the existing `root` SSH key, installs base packages, applies Ubuntu package upgrades, performs one automatic reboot if required, enables unattended security updates, installs Docker with log rotation, installs Tailscale, configures a minimal `zsh` environment for the admin user, starts internal-only Caddy plus `cloudflared` in Docker, syncs a dedicated Cloudflare Tunnel and DNS routes for one or more domains, installs a lightweight healthcheck timer with optional Telegram alerts, and then disables all public ingress. The server is reached over Tailscale SSH; public `22`, `80`, and `443` stay closed.
+This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the existing `root` SSH key, installs base packages, applies Ubuntu package upgrades, performs one automatic reboot if required, enables unattended security updates, installs Docker with log rotation, installs Tailscale, configures a minimal `zsh` environment for the admin user, starts internal-only Caddy plus `cloudflared` in Docker, syncs a dedicated Cloudflare Tunnel and DNS routes for one or more domains, installs a lightweight healthcheck timer with optional Telegram alerts, and then disables all public ingress. The server is reached with OpenSSH over Tailscale; public `22`, `80`, and `443` stay closed.
 
 ## Files
 
 - `bootstrap/hosts/.env.example`: generic template for host-specific configuration.
 - `bootstrap/hosts/.env.production`: ignored working copy for the server you are bootstrapping.
 - `bootstrap/local/bootstrap-host.sh`: main entrypoint from this Mac.
-- `bootstrap/local/reconcile-host.sh`: reruns the idempotent remote converger on an existing host over Tailscale SSH.
+- `bootstrap/local/reconcile-host.sh`: reruns the idempotent remote converger on an existing host with OpenSSH over Tailscale.
 - `bootstrap/local/configure-config-sync.sh`: registers a named config-sync target for the managed webhook on an existing host.
 - `bootstrap/local/configure-deploy-target.sh`: registers a named deploy target for the managed webhook on an existing host.
-- `bootstrap/local/prune-deploy-images.sh`: prunes old local images for a named deploy target on an existing host over Tailscale SSH.
+- `bootstrap/local/prune-deploy-images.sh`: prunes old local images for a named deploy target on an existing host with OpenSSH over Tailscale.
 - `bootstrap/local/restart-proxy.sh`: restarts the managed Caddy proxy stack on an existing host so new route files take effect.
 - `bootstrap/local/cloudflare-tunnel.sh`: syncs remote-managed tunnel ingress and DNS routes through the Cloudflare API.
-- `bootstrap/local/codex-login.sh`: opens an interactive Codex login session over Tailscale SSH on the server.
+- `bootstrap/local/codex-login.sh`: opens an interactive Codex login session with OpenSSH over Tailscale on the server.
 - `bootstrap/local/test-deploy-webhook.sh`: calls the managed deploy webhook for a named target and image tag.
 - `bootstrap/local/test-config-sync-webhook.sh`: calls the managed config-sync webhook for a named target and git ref.
 - `bootstrap/local/sync-local-codex-home.sh`: syncs repo-managed global Codex defaults, including `AGENTS.md`, `machine-notes.md`, and the default Codex config, onto this machine.
@@ -24,6 +24,9 @@ This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the ex
 - `bootstrap/remote/lockdown-ssh.sh`: remote hardening step that leaves only Tailscale ingress open.
 
 ## Required inputs
+
+- `ADMIN_USER`: admin account used by all local SSH helpers. Default: `admin`. For an existing host, set this to its current account in the host env file before reconciliation.
+- `BOOTSTRAP_SSH_KEY`: path to the SSH private key. Set this environment variable before bootstrap or reconciliation.
 
 - `TUNNEL_TOKEN`: token copied from the new tunnel you create for this server.
 - `TUNNEL_ID`: UUID of that tunnel.
@@ -45,7 +48,7 @@ This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the ex
 5. Run:
 
 ```bash
-./bootstrap/local/bootstrap-host.sh bootstrap/hosts/.env.production
+BOOTSTRAP_SSH_KEY=/path/to/key ./bootstrap/local/bootstrap-host.sh bootstrap/hosts/.env.production
 ```
 
 Example:
@@ -59,7 +62,7 @@ On a fresh Ubuntu image, the bootstrap may reboot the host once after package up
 To apply updated bootstrap logic to an already-bootstrapped host over Tailscale:
 
 ```bash
-./bootstrap/local/reconcile-host.sh bootstrap/hosts/.env.production
+BOOTSTRAP_SSH_KEY=/path/to/key ./bootstrap/local/reconcile-host.sh bootstrap/hosts/.env.production
 ```
 
 ## Optional toggles
@@ -67,13 +70,12 @@ To apply updated bootstrap logic to an already-bootstrapped host over Tailscale:
 - `BOOTSTRAP_SKIP_CLOUDFLARE=1`: skip tunnel ingress and DNS sync.
 - `BOOTSTRAP_SKIP_SMOKE_CHECK=1`: skip the HTTPS smoke check.
 - `BOOTSTRAP_SKIP_LOCKDOWN=1`: leave public SSH enabled for a manual troubleshooting pass.
-- `BOOTSTRAP_SSH_KEY=/path/to/key`: override the default SSH key path.
 
 ## End state
 
-- `makon` exists as a passwordless sudo user with the same admin key installed.
-- `makon` uses `zsh` as the login shell with packaged autosuggestions and syntax highlighting plus a minimal managed `~/.zshrc.d/bootstrap.zsh`.
-- Tailscale is up with SSH enabled and the host named from `TAILSCALE_HOSTNAME`.
+- The configured admin account exists as a passwordless sudo user with the same admin key installed.
+- The configured admin account uses `zsh` as the login shell with packaged autosuggestions and syntax highlighting plus a minimal managed `~/.zshrc.d/bootstrap.zsh`.
+- Tailscale is up with Tailscale SSH disabled and the host named from `TAILSCALE_HOSTNAME`.
 - unattended security updates are enabled for Ubuntu packages.
 - Docker Engine and the Compose plugin are installed and enabled.
 - Docker uses local log rotation with `max-size=10m` and `max-file=3`.
@@ -90,7 +92,7 @@ To apply updated bootstrap logic to an already-bootstrapped host over Tailscale:
 - `notify "message"` is available for the admin user on the server and sends a one-off Telegram alert without `sudo`.
 - if deploy webhook credentials are present, a small authenticated webhook service runs on the host and is reverse proxied through the managed Caddy stack.
 - Cloudflare wildcard or exact DNS CNAMEs point at `<TUNNEL_ID>.cfargotunnel.com`.
-- Public SSH and all other public ingress are disabled once Tailscale SSH is verified.
+- Public SSH and all other public ingress are disabled once OpenSSH over Tailscale is verified.
 
 ## Codex CLI
 
@@ -228,3 +230,18 @@ ssh-keygen -t ed25519 -C "makon-dev-0 github" -f ~/.ssh/github_ed25519
 ```bash
 ssh -T git@github.com
 ```
+
+## OpenSSH access and existing hosts
+
+Bootstrap uses the configured admin public key. It preserves other authorized keys and existing options on a matching key. To limit the clients that can use a key, add a `from="<client-tailscale-ip>"` option to that key in the admin user's `~/.ssh/authorized_keys`. Reconciliation preserves that restriction. Keep a separate recovery method.
+
+Use a client SSH config entry with `HostName <server-tailscale-name>`, `User <admin-user>`, `IdentityFile <private-key>`, `IdentitiesOnly yes`, and `ForwardAgent no`. Verify the server's OpenSSH host-key fingerprint through a trusted channel before accepting it. Bootstrap uses first-use host-key acceptance and rejects changed keys; verify both the public and Tailscale host keys independently.
+
+Before you transition an existing host, set `ADMIN_USER` in its host env file to the current admin account. This sets the account for reconciliation and all follow-up helpers. Then use the console for this transition:
+
+1. Check the admin public key and its restrictions. Run `sudo sshd -t` and confirm that OpenSSH is running. Record its host-key fingerprint.
+2. Run `sudo tailscale set --ssh=false` in the console.
+3. From a separate client, verify the fingerprint, make a new key-authenticated OpenSSH connection over Tailscale, and run `sudo -n true`.
+4. Keep console access until these checks pass. If a check fails, repair OpenSSH or restore Tailscale SSH from the console. Run reconciliation only after the checks pass.
+
+Tailscale SSH and OpenSSH use different host keys. Verify the new fingerprint before removing the old entry. See [Tailscale's transition guidance](https://tailscale.com/docs/features/tailscale-ssh#disable-tailscale-ssh).
