@@ -10,10 +10,10 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 [ $# -eq 1 ] || fail "Usage: bootstrap/local/codex-login.sh <env-file>"
 
 ENV_FILE=$1
-ADMIN_USER=${ADMIN_USER:-makon}
 
 require_command ssh
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
 require_var TAILSCALE_HOSTNAME
 
 log "Launching Codex login on $ADMIN_USER@$TAILSCALE_HOSTNAME"

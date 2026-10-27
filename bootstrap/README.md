@@ -25,6 +25,7 @@ This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the ex
 
 ## Required inputs
 
+- `ADMIN_USER`: admin account used by all local SSH helpers. Default: `admin`. For an existing host, set this to its current account in the host env file before reconciliation.
 - `BOOTSTRAP_SSH_KEY`: path to the SSH private key. Set this environment variable before bootstrap or reconciliation.
 
 - `TUNNEL_TOKEN`: token copied from the new tunnel you create for this server.
@@ -72,8 +73,8 @@ BOOTSTRAP_SSH_KEY=/path/to/key ./bootstrap/local/reconcile-host.sh bootstrap/hos
 
 ## End state
 
-- `makon` exists as a passwordless sudo user with the same admin key installed.
-- `makon` uses `zsh` as the login shell with packaged autosuggestions and syntax highlighting plus a minimal managed `~/.zshrc.d/bootstrap.zsh`.
+- The configured admin account exists as a passwordless sudo user with the same admin key installed.
+- The configured admin account uses `zsh` as the login shell with packaged autosuggestions and syntax highlighting plus a minimal managed `~/.zshrc.d/bootstrap.zsh`.
 - Tailscale is up with Tailscale SSH disabled and the host named from `TAILSCALE_HOSTNAME`.
 - unattended security updates are enabled for Ubuntu packages.
 - Docker Engine and the Compose plugin are installed and enabled.
@@ -236,7 +237,7 @@ Bootstrap uses the configured admin public key. It preserves other authorized ke
 
 Use a client SSH config entry with `HostName <server-tailscale-name>`, `User <admin-user>`, `IdentityFile <private-key>`, `IdentitiesOnly yes`, and `ForwardAgent no`. Verify the server's OpenSSH host-key fingerprint through a trusted channel before accepting it. Bootstrap uses first-use host-key acceptance and rejects changed keys; verify both the public and Tailscale host keys independently.
 
-For an existing Tailscale SSH host, use the console for this transition:
+Before you transition an existing host, set `ADMIN_USER` in its host env file to the current admin account. This sets the account for reconciliation and all follow-up helpers. Then use the console for this transition:
 
 1. Check the admin public key and its restrictions. Run `sudo sshd -t` and confirm that OpenSSH is running. Record its host-key fingerprint.
 2. Run `sudo tailscale set --ssh=false` in the console.

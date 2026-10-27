@@ -183,7 +183,6 @@ BOOTSTRAP_SKIP_CLOUDFLARE=${BOOTSTRAP_SKIP_CLOUDFLARE:-0}
 BOOTSTRAP_SKIP_SMOKE_CHECK=${BOOTSTRAP_SKIP_SMOKE_CHECK:-0}
 BOOTSTRAP_SKIP_LOCKDOWN=${BOOTSTRAP_SKIP_LOCKDOWN:-0}
 REMOTE_DIR=${BOOTSTRAP_REMOTE_DIR:-/root/bootstrap-bundle}
-ADMIN_USER=${ADMIN_USER:-admin}
 
 require_var BOOTSTRAP_SSH_KEY
 require_command ssh
@@ -191,6 +190,7 @@ require_command scp
 require_command tar
 require_command curl
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
 require_var HOSTNAME
 require_var TAILSCALE_AUTHKEY
 require_var TAILSCALE_HOSTNAME

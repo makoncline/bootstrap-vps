@@ -14,7 +14,7 @@ Usage: bootstrap/local/configure-deploy-target.sh <env-file> <target> <stack-dir
 Create or update a named deploy target on an already-bootstrapped host with OpenSSH over Tailscale.
 
 Optional environment overrides:
-  ADMIN_USER=makon
+  ADMIN_USER=admin
   DEPLOY_NAME="Daylily Catalog"
   DEPLOY_COMPOSE_FILE=/srv/stacks/daylilycatalog/compose.yaml
   DEPLOY_STACK_ENV_FILE=/srv/stacks/daylilycatalog/.env
@@ -36,7 +36,6 @@ ENV_FILE=$1
 TARGET=$2
 STACK_DIR=$3
 SMOKE_URL=$4
-ADMIN_USER=${ADMIN_USER:-makon}
 DEPLOY_NAME=${DEPLOY_NAME:-$TARGET}
 DEPLOY_COMPOSE_FILE=${DEPLOY_COMPOSE_FILE:-$STACK_DIR/compose.yaml}
 DEPLOY_STACK_ENV_FILE=${DEPLOY_STACK_ENV_FILE:-$STACK_DIR/.env}
@@ -49,6 +48,7 @@ DEPLOY_KEEP_IMAGE_COUNT=${DEPLOY_KEEP_IMAGE_COUNT:-0}
 
 require_command ssh
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
 require_var TAILSCALE_HOSTNAME
 
 case "$TARGET" in

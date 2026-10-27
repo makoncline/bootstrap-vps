@@ -14,7 +14,7 @@ Usage: bootstrap/local/configure-config-sync.sh <env-file> <target> <repo-url> <
 Create or update a named config-sync target on an already-bootstrapped host with OpenSSH over Tailscale.
 
 Optional environment overrides:
-  ADMIN_USER=makon
+  ADMIN_USER=admin
   SYNC_NAME="Daylily Catalog"
   SYNC_COMPOSE_DEST=/srv/stacks/daylilycatalog/compose.yaml
   SYNC_ROUTE_DEST=/srv/stacks/proxy/sites/20-daylilycatalog.caddy
@@ -34,7 +34,6 @@ REPO_URL=$3
 CONFIG_SUBDIR=$4
 STACK_DIR=$5
 SMOKE_URL=$6
-ADMIN_USER=${ADMIN_USER:-makon}
 SYNC_NAME=${SYNC_NAME:-$TARGET}
 SYNC_COMPOSE_DEST=${SYNC_COMPOSE_DEST:-$STACK_DIR/compose.yaml}
 SYNC_ROUTE_DEST=${SYNC_ROUTE_DEST:-/srv/stacks/proxy/sites/20-$TARGET.caddy}
@@ -43,6 +42,7 @@ SYNC_CHECKOUT_DIR=${SYNC_CHECKOUT_DIR:-/var/lib/bootstrap-config-sync/$TARGET}
 
 require_command ssh
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
 require_var TAILSCALE_HOSTNAME
 
 case "$TARGET" in

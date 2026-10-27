@@ -136,13 +136,13 @@ write_runtime_env_file() {
 }
 
 ENV_FILE=$1
-ADMIN_USER=${ADMIN_USER:-admin}
-REMOTE_DIR=${BOOTSTRAP_REMOTE_DIR:-/home/$ADMIN_USER/.cache/bootstrap-bundle}
 
 require_var BOOTSTRAP_SSH_KEY
 require_command ssh
 require_command tar
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
+REMOTE_DIR=${BOOTSTRAP_REMOTE_DIR:-/home/$ADMIN_USER/.cache/bootstrap-bundle}
 require_var HOSTNAME
 require_var TAILSCALE_AUTHKEY
 require_var TAILSCALE_HOSTNAME

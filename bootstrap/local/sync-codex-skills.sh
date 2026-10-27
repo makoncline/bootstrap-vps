@@ -10,11 +10,11 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 [ $# -eq 1 ] || fail "Usage: bootstrap/local/sync-codex-skills.sh <env-file>"
 
 ENV_FILE=$1
-ADMIN_USER=${ADMIN_USER:-makon}
 
 require_command ssh
 require_command tar
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
 require_var TAILSCALE_HOSTNAME
 
 tar_skills_to_stdout() {

@@ -24,10 +24,10 @@ EOF
 ENV_FILE=$1
 TARGET=$2
 KEEP_COUNT=${3:-}
-ADMIN_USER=${ADMIN_USER:-makon}
 
 require_command ssh
 load_env_file "$ENV_FILE"
+ADMIN_USER=${ADMIN_USER:-admin}
 require_var TAILSCALE_HOSTNAME
 
 case "$TARGET" in
