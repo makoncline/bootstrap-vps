@@ -570,8 +570,8 @@ run_compose_update() {
   stack_dir=$2
   stack_env_file=$3
   (
-    cd "$stack_dir"
-    env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" pull
+    cd "$stack_dir" || return
+    env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" pull || return
     env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" up -d
   )
 }
