@@ -265,3 +265,11 @@ Before you transition an existing host, set `ADMIN_USER` in its host env file to
 4. Keep console access until these checks pass. If a check fails, repair OpenSSH or restore Tailscale SSH from the console. Run reconciliation only after the checks pass.
 
 Tailscale SSH and OpenSSH use different host keys. Verify the new fingerprint before removing the old entry. See [Tailscale's transition guidance](https://tailscale.com/docs/features/tailscale-ssh#disable-tailscale-ssh).
+
+## Host and action logs
+
+Host journals persist across boots, with a 256 MiB budget, a 1 GiB free-space reserve, and a seven-day maximum age. Available history can be shorter under load. Docker keeps its existing rotated JSON logs. Caddy access logs use the separate bounded file described above.
+
+Deploy and config-sync commands run through `bootstrap-run-action`. It records an action ID, target, phase, timestamps, exit status, and up to 1 MiB of sanitized output in the journal under `bootstrap-action`. Part of that budget is reserved for the final result, including the output-truncation flag. Deployment commands have a ten-minute deadline, with a five-minute new-version phase and a separate two-minute rollback budget. Rollback uses the cached previous image without a registry pull or build. The latest result is stored in `/var/lib/bootstrap/last-action.json`; unavailable journals and truncated output are marked. Webhook errors return the action ID rather than raw command output. Do not print environment files or credentials from custom deploy commands. Git errors reach the same bounded logger. Redaction covers known host secrets, common credential fields, and HTTP URL credentials; it cannot make arbitrary application output safe to share.
+
+Health checks save the current result independently from the last delivered alert. A failed Telegram request is bounded and retried on the next health check.

@@ -16,3 +16,4 @@ jobs:
       - run: ./tests/run.sh
       - run: python3 tests/test_ssh.py
       - run: python3 tests/test_proxy.py
+      - run: python3 tests/test_journal.py

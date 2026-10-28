@@ -18,7 +18,7 @@ REMOTE_INIT_REBOOT_REQUIRED_EXIT=42
 ensure_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y ca-certificates curl git jq python3 rsync sudo ufw unattended-upgrades zsh zsh-autosuggestions zsh-syntax-highlighting
+  apt-get install -y ca-certificates curl git jq python3 rsync sudo util-linux ufw unattended-upgrades zsh zsh-autosuggestions zsh-syntax-highlighting
 }
 
 ensure_system_upgrades() {
@@ -346,6 +346,27 @@ EOF
   rm -rf "$temp_dir"
 }
 
+ensure_action_logging() {
+  local settings
+  install -d -m 750 -o "$ADMIN_USER" -g "$ADMIN_USER" /var/lib/bootstrap
+  install -m 755 "$SCRIPT_DIR/run-action.py" /usr/local/bin/bootstrap-run-action
+  settings=$(mktemp)
+  cat > "$settings" <<'EOF'
+[Journal]
+Storage=persistent
+SystemMaxUse=256M
+SystemKeepFree=1G
+RuntimeMaxUse=64M
+MaxRetentionSec=7day
+EOF
+  if [ ! -f /etc/systemd/journald.conf.d/60-bootstrap.conf ] || ! cmp -s "$settings" /etc/systemd/journald.conf.d/60-bootstrap.conf; then
+    install -D -m 644 "$settings" /etc/systemd/journald.conf.d/60-bootstrap.conf
+    systemctl restart systemd-journald
+    journalctl --flush
+  fi
+  rm -f "$settings"
+}
+
 ensure_deploy_webhook_config() {
   local temp_dir temp_file
   install -d -m 750 -o root -g "$ADMIN_USER" /etc/bootstrap /etc/bootstrap/deploy-hooks /etc/bootstrap/config-sync
@@ -479,6 +500,15 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
+phase_deadline=$((SECONDS + 300))
+
+run_bounded() {
+  local remaining
+  remaining=$((phase_deadline - SECONDS))
+  [ "$remaining" -gt 0 ] || return 124
+  timeout --kill-after=5 "$remaining" "$@"
+}
+
 fail() {
   printf '%s\n' "$*" >&2
   exit 1
@@ -534,28 +564,30 @@ ensure_cache_dir() {
   cache_dir=$1
   cache_uid=$2
   cache_gid=$3
-  sudo install -d "$cache_dir"
-  sudo chown "$cache_uid:$cache_gid" "$cache_dir"
+  run_bounded sudo install -d "$cache_dir" || return
+  run_bounded sudo chown "$cache_uid:$cache_gid" "$cache_dir"
 }
 
 clear_cache_dir() {
   local cache_dir
   cache_dir=$1
   [ -d "$cache_dir" ] || return 0
-  sudo find "$cache_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  run_bounded sudo find "$cache_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 }
 
 smoke_check() {
   local smoke_url attempts
   smoke_url=$1
   [ -n "$smoke_url" ] || return 0
-  attempts=24
+  attempts=12
   while [ "$attempts" -gt 0 ]; do
-    if curl --fail --silent --show-error --max-time 20 "$smoke_url" >/dev/null; then
+    if run_bounded curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$smoke_url" >/dev/null; then
       return 0
     fi
     attempts=$((attempts - 1))
-    sleep 5
+    if [ "$attempts" -gt 0 ]; then
+      run_bounded sleep 5 || return
+    fi
   done
   return 1
 }
@@ -567,8 +599,7 @@ run_compose_update() {
   stack_env_file=$3
   (
     cd "$stack_dir" || return
-    env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" pull || return
-    env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" up -d
+    run_bounded env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" up -d --pull never --no-build
   )
 }
 
@@ -576,6 +607,9 @@ run_compose_update() {
 
 target=$1
 new_tag=$2
+if [ -z "${BOOTSTRAP_ACTION_ID:-}" ]; then
+  exec /usr/local/bin/bootstrap-run-action deploy "$target" "$0" "$@"
+fi
 shift 2
 clear_cache=0
 
@@ -634,7 +668,8 @@ deploy_failed=0
 rollback_status="not attempted"
 
 update_image_tag "$stack_env_file" "$new_tag"
-if ! run_compose_update "$compose_file" "$stack_dir" "$stack_env_file" || ! smoke_check "$smoke_url"; then
+if ! (cd "$stack_dir" && run_bounded env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" pull) ||
+   ! run_compose_update "$compose_file" "$stack_dir" "$stack_env_file" || ! smoke_check "$smoke_url"; then
   deploy_failed=1
 fi
 
@@ -652,7 +687,12 @@ url: ${smoke_url:-n/a}"
   exit 0
 fi
 
+printf 'Retaining failed-version logs before rollback\n'
+(cd "$stack_dir" && timeout --kill-after=5 10 env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" logs --no-color --since 10m --tail 100) ||
+  printf 'Failed-version logs are unavailable\n' >&2
+
 if [ "$auto_rollback" = "1" ] && [ "$previous_tag" != "$new_tag" ]; then
+  phase_deadline=$((SECONDS + 120))
   update_image_tag "$stack_env_file" "$previous_tag"
   if run_compose_update "$compose_file" "$stack_dir" "$stack_env_file" && smoke_check "$smoke_url"; then
     rollback_status="successful"
@@ -719,19 +759,22 @@ fetch_repo_ref() {
 
   if [ ! -d "$checkout_dir/.git" ]; then
     install -d "$(dirname "$checkout_dir")"
-    git clone --filter=blob:none --no-checkout "$repo_url" "$checkout_dir" >/dev/null 2>&1
-    git -C "$checkout_dir" sparse-checkout init --cone >/dev/null 2>&1
-    git -C "$checkout_dir" sparse-checkout set "$config_subdir" >/dev/null 2>&1
+    git clone --filter=blob:none --no-checkout "$repo_url" "$checkout_dir" >/dev/null
+    git -C "$checkout_dir" sparse-checkout init --cone >/dev/null
+    git -C "$checkout_dir" sparse-checkout set "$config_subdir" >/dev/null
   fi
 
-  git -C "$checkout_dir" fetch --depth 1 origin "$git_ref" >/dev/null 2>&1
-  git -C "$checkout_dir" checkout --detach FETCH_HEAD >/dev/null 2>&1
+  git -C "$checkout_dir" fetch --depth 1 origin "$git_ref" >/dev/null
+  git -C "$checkout_dir" checkout --detach FETCH_HEAD >/dev/null
 }
 
 [ $# -eq 2 ] || fail "Usage: bootstrap-sync-config.sh <target> <git-ref>"
 
 target=$1
 git_ref=$2
+if [ -z "${BOOTSTRAP_ACTION_ID:-}" ]; then
+  exec /usr/local/bin/bootstrap-run-action config-sync "$target" "$0" "$@"
+fi
 
 case "$target" in
   *[!A-Za-z0-9._-]*|'') fail "Invalid target name: $target" ;;
@@ -873,9 +916,6 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"ok": False, "error": "unauthorized"})
             return
 
-        if not self.path.startswith("/deploy/"):
-            pass
-
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -892,6 +932,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": "invalid json"})
             return
 
+        if not isinstance(payload, dict):
+            self._json(400, {"ok": False, "error": "invalid request body"})
+            return
+
         command = None
         response_payload = {}
         target = None
@@ -903,7 +947,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             image_tag = payload.get("image_tag")
-            clear_cache = bool(payload.get("clear_cache", False))
+            clear_cache = payload.get("clear_cache", False)
+            if not isinstance(clear_cache, bool):
+                self._json(400, {"ok": False, "error": "invalid clear_cache"})
+                return
             if not isinstance(image_tag, str) or not IMAGE_TAG_RE.fullmatch(image_tag):
                 self._json(400, {"ok": False, "error": "invalid image_tag"})
                 return
@@ -930,21 +977,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         completed = subprocess.run(command, capture_output=True, text=True)
+        try:
+            action = json.loads(completed.stdout)
+            action_id = action["action_id"]
+            if not isinstance(action_id, str) or not re.fullmatch(r"[a-f0-9]{32}", action_id):
+                raise ValueError("invalid action id")
+        except (ValueError, KeyError, TypeError):
+            self._json(500, {"ok": False, "error": "action result unavailable"})
+            return
+        response_payload["action_id"] = action_id
         if completed.returncode == 0:
             self._json(200, {"ok": True, **response_payload})
             return
-        if completed.returncode == 3:
-            self._json(409, {"ok": False, "error": completed.stderr.strip() or "action in progress"})
-            return
-
-        self._json(
-            500,
-            {
-                "ok": False,
-                "error": completed.stderr.strip() or "deploy failed",
-                **response_payload,
-            },
-        )
+        status = 409 if completed.returncode == 3 else (504 if completed.returncode == 124 else 500)
+        self._json(status, {"ok": False, "error": "action failed; inspect the action log", **response_payload})
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1037,7 +1083,7 @@ chat_id=${TELEGRAM_CHAT_ID#\#}
 [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || exit 0
 [ -n "${chat_id:-}" ] || exit 0
 
-curl --fail --silent --show-error \
+curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
   -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
   --data-urlencode "chat_id=${chat_id}" \
   --data-urlencode "text=${message}" \
@@ -1064,7 +1110,8 @@ set -euo pipefail
 
 ENV_FILE=${1:-/etc/bootstrap/server.env}
 STATE_DIR=/var/lib/bootstrap-health
-STATE_FILE=$STATE_DIR/last-state
+STATE_FILE=$STATE_DIR/current-state
+ALERT_STATE_FILE=$STATE_DIR/last-alert-state
 mkdir -p "$STATE_DIR"
 
 [ -f "$ENV_FILE" ] || exit 0
@@ -1094,15 +1141,15 @@ if ! systemctl is-active --quiet tailscaled; then
   append_failure "tailscaled service is not active"
 fi
 
-if ! tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null; then
+if ! timeout 10 tailscale status --json 2>/dev/null | jq -e '.BackendState == "Running"' >/dev/null; then
   append_failure "tailscale backend is not running"
 fi
 
-if ! docker compose -f /srv/stacks/proxy/compose.yaml ps --status running --services 2>/dev/null | grep -qx 'caddy'; then
+if ! timeout 10 docker compose -f /srv/stacks/proxy/compose.yaml ps --status running --services 2>/dev/null | grep -qx 'caddy'; then
   append_failure "proxy stack is not healthy"
 fi
 
-if ! docker compose -f /srv/stacks/tunnel/compose.yaml ps --status running --services 2>/dev/null | grep -qx 'cloudflared'; then
+if ! timeout 10 docker compose -f /srv/stacks/tunnel/compose.yaml ps --status running --services 2>/dev/null | grep -qx 'cloudflared'; then
   append_failure "tunnel stack is not healthy"
 fi
 
@@ -1121,24 +1168,28 @@ if [ -n "$disk_pct" ] && [ "$disk_pct" -ge "$disk_threshold" ]; then
   append_failure "disk usage is ${disk_pct}% on /"
 fi
 
-previous_state="unknown"
-if [ -f "$STATE_FILE" ]; then
-  previous_state=$(cat "$STATE_FILE")
+previous_alert="unknown"
+if [ -f "$ALERT_STATE_FILE" ]; then
+  previous_alert=$(cat "$ALERT_STATE_FILE")
 fi
 
+status=0
+current_state=ok
 if [ -n "$failures" ]; then
-  current_state="fail:${failures}"
-  if [ "$current_state" != "$previous_state" ]; then
-    printf '%s\n' "$current_state" >"$STATE_FILE"
-    /usr/local/bin/bootstrap-alert.sh "[${HOSTNAME}] healthcheck failed: ${failures}"
+  current_state="fail:$failures"
+  status=1
+fi
+printf '%s\n' "$current_state" > "$STATE_FILE"
+printf 'health=%s\n' "$current_state"
+if [ "$current_state" != "$previous_alert" ]; then
+  if /usr/local/bin/bootstrap-alert.sh "[${HOSTNAME}] healthcheck: $current_state"; then
+    printf '%s\n' "$current_state" > "$ALERT_STATE_FILE"
+  else
+    printf 'Health alert delivery failed; the next check will retry\n' >&2
   fi
-  exit 1
 fi
+exit "$status"
 
-printf '%s\n' "ok" >"$STATE_FILE"
-if [ "$previous_state" != "ok" ]; then
-  /usr/local/bin/bootstrap-alert.sh "[${HOSTNAME}] healthcheck recovered"
-fi
 EOF
   chmod 755 /usr/local/bin/bootstrap-healthcheck.sh
 }
@@ -1152,6 +1203,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=90
 ExecStart=/usr/local/bin/bootstrap-healthcheck.sh /etc/bootstrap/server.env
 EOF
 
@@ -1380,6 +1432,7 @@ start_stacks
 /usr/local/bin/bootstrap-apply-proxy
 log "Installing monitoring scripts and timer"
 ensure_monitoring_config
+ensure_action_logging
 ensure_deploy_webhook_config
 ensure_deploy_scripts
 ensure_deploy_webhook_service

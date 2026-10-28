@@ -154,7 +154,7 @@ with tempfile.TemporaryDirectory(prefix="bootstrap-proxy-") as directory:
         sync = source.split('write_if_changed "/usr/local/bin/bootstrap-sync-config.sh" <<\'EOF\'\n', 1)[1].split("\nEOF", 1)[0]
         sync = sync.replace("/etc/bootstrap/config-sync", str(targets)).replace("/usr/local/bin/bootstrap-apply-proxy", str(helper)).replace("/usr/local/bin/notify", str(tools / "notify"))
         (root / "sync.sh").write_text(sync)
-        fixture_env = dict(os.environ, HOME=str(root), DOCKER_CONFIG=os.environ.get("DOCKER_CONFIG", str(Path.home() / ".docker")), PATH=f"{tools}:{os.environ['PATH']}")
+        fixture_env = dict(os.environ, BOOTSTRAP_ACTION_ID="test", HOME=str(root), DOCKER_CONFIG=os.environ.get("DOCKER_CONFIG", str(Path.home() / ".docker")), PATH=f"{tools}:{os.environ['PATH']}")
         subprocess.run(["bash", str(root / "sync.sh"), "example", "HEAD"], check=True, env=fixture_env)
         assert "config sync successful" in (root / "notifications").read_text()
         expect_response("after")

@@ -20,6 +20,7 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-deploy-') as directory:
     scripts = {
         'sudo': '#!/bin/sh\n[ "$1" != chown ] || exit 0\nexec "$@"\n',
         'flock': '#!/bin/sh\nexit 0\n',
+        'timeout': '#!/bin/sh\ncase "$1" in --kill-after=*) shift ;; esac\nshift\nexec "$@"\n',
         'notify': '#!/bin/sh\nexit 0\n',
         'docker': '''#!/bin/sh
 operation=""
@@ -40,7 +41,7 @@ exit 0
     deploy.write_text(script)
     env_file.write_text('IMAGE_TAG="old"\n')
     env = dict(os.environ, PATH=f'{root}/bin:{os.environ["PATH"]}', HOME=str(root),
-               TEST_STACK_ENV=str(env_file), TEST_DOCKER_LOG=str(log))
+               TEST_STACK_ENV=str(env_file), TEST_DOCKER_LOG=str(log), BOOTSTRAP_ACTION_ID="test")
     result = subprocess.run(['bash', str(deploy), 'example', 'new'], env=env, capture_output=True, text=True)
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'up' not in '\n'.join(line for line in log.read_text().splitlines() if '"new"' in line), log.read_text()

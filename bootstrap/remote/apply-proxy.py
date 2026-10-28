@@ -14,6 +14,7 @@ import time
 def run(*command, timeout=15):
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     if result.returncode:
+        print(result.stderr[-8192:], file=sys.stderr)
         raise RuntimeError(f'{command[0]} failed (exit {result.returncode})')
     return result.stdout + result.stderr
 
