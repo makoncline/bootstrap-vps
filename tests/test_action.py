@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-action-') as directory:
     logger.write_text(f'#!/bin/sh\ncat >> "{journal}"\n')
     logger.chmod(0o755)
     runner = root / 'runner.py'
-    source = (ROOT / 'bootstrap/remote/run-action.py').read_text()
+    source = (ROOT / 'bootstrap/remote/run_action.py').read_text()
     config = root / 'config'
     config.mkdir()
     writer = (ROOT / 'bootstrap/local/bootstrap-host.sh').read_text().split('append_env() {\n', 1)[1].split('\n}', 1)[0]
@@ -42,8 +42,8 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-action-') as directory:
         assert json.loads(state) == {'status': 'succeeded', 'value': '[redacted]'}
     env = dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}', EXAMPLE_TOKEN='private-marker-123')
 
-    def action(code):
-        result = subprocess.run([sys.executable, str(runner), 'deploy', 'example', sys.executable, '-c', code],
+    def action(code, phase="deploy"):
+        result = subprocess.run([sys.executable, str(runner), phase, 'example', sys.executable, '-c', code],
                                 capture_output=True, text=True, env=env, timeout=10)
         record = json.loads((root / 'state/last-action.json').read_text())
         assert record == json.loads(result.stdout)
@@ -71,6 +71,9 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-action-') as directory:
     result, record = action('import time; print("started", flush=True); time.sleep(60)')
     assert result.returncode == 124 and record['status'] == 'timed_out'
     assert record['elapsed_seconds'] < 8
+    result, record = action('print("[bootstrap] Applying packages"); raise SystemExit(42)', phase='bootstrap')
+    assert record['status'] == 'reboot_required' and record['step'] == 'Applying packages'
+    assert json.loads((root / 'state/last-setup.json').read_text()) == record
     assert (root / 'state/last-action.json').stat().st_mode & 0o777 == 0o640
 
     real_git = shutil.which('git')

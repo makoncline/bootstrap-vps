@@ -110,6 +110,8 @@ write_runtime_env_file() {
   append_env HOST_PUBLIC_IPV4 "${HOST_PUBLIC_IPV4:-}"
   append_env HOST_PUBLIC_IPV6 "${HOST_PUBLIC_IPV6:-}"
   append_env HOSTNAME "$HOSTNAME"
+  append_env BOOTSTRAP_REVISION "$(git -C "$REPO_ROOT" describe --always --dirty --abbrev=40)"
+  append_env BOOTSTRAP_OPERATION reconcile
   append_env TAILSCALE_AUTHKEY "$TAILSCALE_AUTHKEY"
   append_env TAILSCALE_HOSTNAME "$TAILSCALE_HOSTNAME"
   append_env TUNNEL_TOKEN "$TUNNEL_TOKEN"
@@ -190,5 +192,7 @@ if [ "$status" -eq "$REMOTE_INIT_REBOOT_REQUIRED_EXIT" ]; then
     fail "Remote reconcile still requires a reboot after the post-upgrade restart"
   fi
 fi
+
+ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "command -v codex >/dev/null && codex --version >/dev/null && sudo -n true"
 
 log "Remote reconcile complete for $HOSTNAME"

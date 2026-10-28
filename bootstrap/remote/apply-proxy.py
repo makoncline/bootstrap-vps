@@ -11,10 +11,11 @@ import sys
 import time
 
 
-def run(*command, timeout=15):
+def run(*command, timeout=15, quiet=False):
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     if result.returncode:
-        print(result.stderr[-8192:], file=sys.stderr)
+        if not quiet:
+            print(result.stderr[-8192:], file=sys.stderr)
         raise RuntimeError(f'{command[0]} failed (exit {result.returncode})')
     return result.stdout + result.stderr
 
@@ -56,7 +57,7 @@ def check_route(url):
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:
-            run('curl', '--fail', '--silent', '--show-error', '--connect-timeout', '2', '--max-time', '3', url, timeout=4)
+            run('curl', '--fail', '--silent', '--show-error', '--connect-timeout', '2', '--max-time', '3', url, timeout=4, quiet=True)
             return
         except (RuntimeError, subprocess.TimeoutExpired):
             time.sleep(0.5)

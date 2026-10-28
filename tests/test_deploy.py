@@ -24,10 +24,11 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-deploy-') as directory:
         'notify': '#!/bin/sh\nexit 0\n',
         'docker': '''#!/bin/sh
 operation=""
-for arg do case "$arg" in pull|up) operation=$arg ;; esac; done
+for arg do case "$arg" in pull|up|logs) operation=$arg ;; esac; done
 tag=$(cat "$TEST_STACK_ENV")
 printf '%s %s\\n' "$operation" "$tag" >> "$TEST_DOCKER_LOG"
 # A cached new image would let up succeed even when its pull failed.
+if [ "$operation" = logs ]; then printf "failed-version-log\\n"; fi
 if [ "$operation" = pull ] && [ "$tag" = 'IMAGE_TAG="new"' ]; then exit 1; fi
 exit 0
 ''',
@@ -46,5 +47,7 @@ exit 0
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'up' not in '\n'.join(line for line in log.read_text().splitlines() if '"new"' in line), log.read_text()
     assert 'up' in log.read_text(), 'The previous version was not restored'
+    assert 'failed-version-log' in result.stdout
+    assert log.read_text().index('logs') < log.read_text().index('up')
     assert env_file.read_text() == 'IMAGE_TAG="old"\n'
     print('PASS: failed pull cannot apply a cached new image; rollback restores the prior version')

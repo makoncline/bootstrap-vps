@@ -114,7 +114,7 @@ request_remote_reboot() {
 
 verify_tailscale_access() {
   log "Verifying OpenSSH over Tailscale for $ADMIN_USER@$TAILSCALE_HOSTNAME"
-  ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "sudo -n tailscale debug prefs | jq -e '.RunSSH == false' >/dev/null"
+  ssh_cmd "$ADMIN_USER@$TAILSCALE_HOSTNAME" "sudo -n tailscale debug prefs | jq -e '.RunSSH == false' >/dev/null && command -v codex >/dev/null && codex --version >/dev/null"
 }
 
 expect_public_ssh_closed() {
@@ -153,6 +153,8 @@ write_runtime_env_file() {
   append_env HOST_PUBLIC_IPV4 "${HOST_PUBLIC_IPV4:-}"
   append_env HOST_PUBLIC_IPV6 "${HOST_PUBLIC_IPV6:-}"
   append_env HOSTNAME "$HOSTNAME"
+  append_env BOOTSTRAP_REVISION "$(git -C "$REPO_ROOT" describe --always --dirty --abbrev=40)"
+  append_env BOOTSTRAP_OPERATION bootstrap
   append_env TAILSCALE_AUTHKEY "$TAILSCALE_AUTHKEY"
   append_env TAILSCALE_HOSTNAME "$TAILSCALE_HOSTNAME"
   append_env TUNNEL_TOKEN "$TUNNEL_TOKEN"

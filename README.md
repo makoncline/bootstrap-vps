@@ -1,6 +1,8 @@
 # servers
 
-Bootstrap for a fresh Hetzner Ubuntu 24.04 VPS using:
+Bootstrap for owner-operated Hetzner Ubuntu 24.04 VPS hosts. Keep changes in small tested commits. Applying them to a live host is a separate operation.
+
+The host setup uses:
 
 - OpenSSH over Tailscale for admin access
 - Docker Compose for app stacks

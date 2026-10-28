@@ -44,6 +44,16 @@ exit 1
 ''', 'test', machine)
             docker('exec', name, 'journalctl', '--flush')
             if iteration == 0:
+                docker('exec', name, 'mkdir', '-p', '/usr/local/lib/bootstrap')
+                for script in ('run_action.py', 'bootstrapctl.py'):
+                    docker('cp', str(ROOT / 'bootstrap/remote' / script), name + ':/usr/local/lib/bootstrap/' + script)
+                docker('exec', name, 'chmod', '755', '/usr/local/lib/bootstrap/bootstrapctl.py')
+                docker('exec', name, 'ln', '-s', '/usr/local/lib/bootstrap/bootstrapctl.py', '/usr/local/bin/bootstrapctl')
+                import json
+                report = json.loads(docker('exec', name, 'bootstrapctl', 'status'))
+                assert report['incomplete'] and report['sections']['docker']['status'] == 'unavailable'
+
+            if iteration == 0:
                 docker('exec', '-i', name, 'logger', '--journald', input='SYSLOG_IDENTIFIER=bootstrap-test\nMESSAGE=persistent-test-evidence\n')
                 docker('exec', name, 'journalctl', '--sync')
             else:

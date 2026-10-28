@@ -19,7 +19,7 @@ if not os.environ.get("DOCKER_CONTEXT"):
 assert endpoint.startswith("unix://"), "Select a local Docker engine."
 image = "bootstrap-ssh-test:local"
 docker("build", "-q", "-t", image, "-", input="""FROM ubuntu:24.04
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server openssh-client sudo ufw iproute2 jq && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server openssh-client sudo ufw iproute2 jq curl git && rm -rf /var/lib/apt/lists/*
 CMD ["sleep", "infinity"]
 """)
 prefix = "bootstrap-ssh-" + uuid.uuid4().hex[:10]

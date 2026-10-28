@@ -49,10 +49,14 @@ def redact(text, secrets):
 
 def save(result):
     STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o750)
-    with tempfile.NamedTemporaryFile(mode='w', dir=STATE_DIR, delete=False) as handle:
-        os.chmod(handle.name, 0o640)
-        json.dump(result, handle)
-    os.replace(handle.name, STATE_DIR / 'last-action.json')
+    names = ['last-action.json']
+    if result['phase'] in ('bootstrap', 'reconcile'):
+        names.append('last-setup.json')
+    for name in names:
+        with tempfile.NamedTemporaryFile(mode='w', dir=STATE_DIR, delete=False) as handle:
+            os.chmod(handle.name, 0o640)
+            json.dump(result, handle)
+        os.replace(handle.name, STATE_DIR / name)
 
 
 def main():
@@ -64,7 +68,14 @@ def main():
     if not re.fullmatch(r'[A-Za-z0-9._-]+', args.target) or not args.command:
         parser.error('a valid target and command are required')
     action = {'action_id': uuid.uuid4().hex, 'phase': args.phase, 'target': args.target,
-              'started_at': utc(), 'status': 'running', 'journal_available': True}
+              'started_at': utc(), 'status': 'running', 'journal_available': True, 'pid': os.getpid(),
+              'revision': os.environ.get('BOOTSTRAP_REVISION', 'unknown')}
+    try:
+        action['boot_id'] = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+        action['process_start'] = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
+    except OSError:
+        action['boot_id'] = None
+        action['process_start'] = None
     secrets = secret_values()
     written = 0
 
@@ -97,6 +108,7 @@ def main():
     event('started')
     save(action)
     started = time.monotonic()
+    timeout = 1800 if args.phase in ('bootstrap', 'reconcile') else ACTION_TIMEOUT
     try:
         child = subprocess.Popen(args.command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  start_new_session=True, env={**os.environ, 'BOOTSTRAP_ACTION_ID': action['action_id']})
@@ -121,7 +133,7 @@ def main():
         with selectors.DefaultSelector() as selector:
             selector.register(child.stdout, selectors.EVENT_READ)
             while selector.get_map() or child.poll() is None:
-                if interrupted or time.monotonic() - started >= ACTION_TIMEOUT:
+                if interrupted or time.monotonic() - started >= timeout:
                     timed_out = not interrupted
                     break
                 for key, _ in selector.select(timeout=0.2):
@@ -155,6 +167,8 @@ def main():
         child.stdout.close()
     action.update(status='interrupted' if interrupted else ('timed_out' if timed_out else ('succeeded' if code == 0 else 'failed')),
                   exit_code=143 if interrupted else (124 if timed_out else code), finished_at=utc(), elapsed_seconds=round(time.monotonic() - started, 2))
+    if code == 42 and args.phase in ('bootstrap', 'reconcile'):
+        action['status'] = 'reboot_required'
     event('finished', terminal=True)
     save(action)
     print(json.dumps(action))

@@ -18,7 +18,7 @@ REMOTE_INIT_REBOOT_REQUIRED_EXIT=42
 ensure_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y ca-certificates curl git jq python3 rsync sudo util-linux ufw unattended-upgrades zsh zsh-autosuggestions zsh-syntax-highlighting
+  apt-get install -y ca-certificates curl git jq python3 procps rsync sudo util-linux ufw unattended-upgrades zsh zsh-autosuggestions zsh-syntax-highlighting
 }
 
 ensure_system_upgrades() {
@@ -349,7 +349,10 @@ EOF
 ensure_action_logging() {
   local settings
   install -d -m 750 -o "$ADMIN_USER" -g "$ADMIN_USER" /var/lib/bootstrap
-  install -m 755 "$SCRIPT_DIR/run-action.py" /usr/local/bin/bootstrap-run-action
+  install -D -m 755 "$SCRIPT_DIR/run_action.py" /usr/local/lib/bootstrap/run_action.py
+  ln -sfn /usr/local/lib/bootstrap/run_action.py /usr/local/bin/bootstrap-run-action
+  install -m 755 "$SCRIPT_DIR/bootstrapctl.py" /usr/local/lib/bootstrap/bootstrapctl.py
+  ln -sfn /usr/local/lib/bootstrap/bootstrapctl.py /usr/local/bin/bootstrapctl
   settings=$(mktemp)
   cat > "$settings" <<'EOF'
 [Journal]
@@ -837,7 +840,7 @@ fi
 restore_compose() {
   [ "$compose_changed" = 1 ] || return 0
   if [ "$compose_existed" = 1 ]; then
-    cat "$backup/compose.yaml" > "$compose_dest"
+    cat "$backup/compose.yaml" > "$compose_dest" || return
     run_compose_apply "$stack_dir" "$compose_dest" "$stack_env_file"
   else
     (cd "$stack_dir" && env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_dest" down) || return
@@ -993,7 +996,9 @@ class Handler(BaseHTTPRequestHandler):
         self._json(status, {"ok": False, "error": "action failed; inspect the action log", **response_payload})
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
+        method = self.command if self.command in ("GET", "POST") else "other"
+        status = args[1] if len(args) > 1 and str(args[1]).isdigit() else "unknown"
+        sys.stderr.write(f"webhook method={method} status={status}\n")
 
 
 def main():
@@ -1376,6 +1381,8 @@ start_stacks() {
 ENV_FILE=$1
 [ "$(id -u)" -eq 0 ] || fail "This script must run as root"
 load_env_file "$ENV_FILE"
+BOOTSTRAP_REVISION=${BOOTSTRAP_REVISION:-unknown}
+export BOOTSTRAP_REVISION
 require_var ADMIN_USER
 require_var ADMIN_SSH_PUBKEY
 require_var HOSTNAME
@@ -1385,6 +1392,14 @@ require_var TAILSCALE_HOSTNAME
 require_var TUNNEL_TOKEN
 
 grep -q 'Ubuntu' /etc/os-release || fail "This bootstrap currently targets Ubuntu"
+
+if [ -z "${BOOTSTRAP_ACTION_ID:-}" ]; then
+  if ! command -v python3 >/dev/null; then
+    apt-get update
+    apt-get install -y python3
+  fi
+  exec python3 "$SCRIPT_DIR/run_action.py" "${BOOTSTRAP_OPERATION:-bootstrap}" host "$0" "$ENV_FILE"
+fi
 
 log "Installing base packages"
 ensure_base_packages
@@ -1439,4 +1454,16 @@ ensure_deploy_webhook_service
 ensure_internal_firewall_rules
 ensure_healthcheck_scripts
 ensure_healthcheck_timer
+python3 - "$BOOTSTRAP_REVISION" <<'PYTHON'
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import sys
+Path('/etc/bootstrap/manifest.json').write_text(json.dumps({
+    'revision': sys.argv[1], 'applied_at': datetime.now(timezone.utc).isoformat(),
+    'caddy_version': '2.11.7', 'service_scope': 'system',
+    'logs': {'host': 'journalctl', 'containers': 'docker compose logs',
+             'actions': 'journalctl -t bootstrap-action', 'access': '/srv/stacks/proxy/logs/access-retained.log'}
+}))
+PYTHON
 log "Initial host bootstrap complete"

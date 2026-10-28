@@ -270,6 +270,23 @@ Tailscale SSH and OpenSSH use different host keys. Verify the new fingerprint be
 
 Host journals persist across boots, with a 256 MiB budget, a 1 GiB free-space reserve, and a seven-day maximum age. Available history can be shorter under load. Docker keeps its existing rotated JSON logs. Caddy access logs use the separate bounded file described above.
 
-Deploy and config-sync commands run through `bootstrap-run-action`. It records an action ID, target, phase, timestamps, exit status, and up to 1 MiB of sanitized output in the journal under `bootstrap-action`. Part of that budget is reserved for the final result, including the output-truncation flag. Deployment commands have a ten-minute deadline, with a five-minute new-version phase and a separate two-minute rollback budget. Rollback uses the cached previous image without a registry pull or build. The latest result is stored in `/var/lib/bootstrap/last-action.json`; unavailable journals and truncated output are marked. Webhook errors return the action ID rather than raw command output. Do not print environment files or credentials from custom deploy commands. Git errors reach the same bounded logger. Redaction covers known host secrets, common credential fields, and HTTP URL credentials; it cannot make arbitrary application output safe to share.
+Deploy and config-sync commands run through `bootstrap-run-action`. It records an action ID, target, phase, timestamps, exit status, and up to 1 MiB of sanitized output in the journal under `bootstrap-action`. Part of that budget is reserved for the final result, including the output-truncation flag. Deployment commands have a ten-minute deadline, with a five-minute new-version phase and a separate two-minute rollback budget. Rollback uses the cached previous image without a registry pull or build. Setup and reconciliation have a thirty-minute deadline. The latest result is stored in `/var/lib/bootstrap/last-action.json`; unavailable journals and truncated output are marked. Webhook errors return the action ID rather than raw command output. Do not print environment files or credentials from custom deploy commands. Git errors reach the same bounded logger. Redaction covers known host secrets, common credential fields, and HTTP URL credentials; it cannot make arbitrary application output safe to share.
 
 Health checks save the current result independently from the last delivered alert. A failed Telegram request is bounded and retried on the next health check.
+
+## Agent diagnostics
+
+Run these on a host you intend to inspect:
+
+```bash
+sudo bootstrapctl status
+sudo bootstrapctl logs actions
+sudo bootstrapctl logs proxy
+sudo bootstrapctl diagnose
+```
+
+`status` reports the applied bootstrap revision, setup/action results, service state, tool versions, running images and log settings, health, resource pressure, and log locations. `logs` selects a host journal, action log, health log, access log, or named stack. `diagnose` combines status with recent host, action, health, proxy, and tunnel logs. It limits queries to recent records, uses a 60-second collection budget, and caps the final JSON report at 1 MiB. Missing, denied, timed-out, and truncated data are marked.
+
+Setup and reconciliation retain their last step and result in `/var/lib/bootstrap/last-setup.json`. An expected package reboot is recorded as `reboot_required`. Diagnostics identify a running record whose process or boot no longer matches as interrupted. The manifest in `/etc/bootstrap/manifest.json` records the applied revision; local bundles mark tracked uncommitted source changes as dirty. The local workflows also verify Codex through the actual non-interactive SSH path.
+
+The command uses the existing admin account and sudo. It makes no repairs. Review logs before sharing them. A complete host reboot has not been tested by the container tests; those tests cover fresh SSH access, a simulated private interface, proxy activation, and journal persistence across container replacement.
