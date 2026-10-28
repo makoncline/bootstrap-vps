@@ -1191,7 +1191,7 @@ EOF
 }
 
 ensure_stack_layout() {
-  install -d -m 755 /srv/stacks/proxy/sites /srv/stacks/tunnel /srv/stacks/whoami
+  install -d -m 755 /srv/stacks/proxy/sites /srv/stacks/proxy/logs /srv/stacks/tunnel /srv/stacks/whoami
   install -d -m 755 -o "$ADMIN_USER" -g "$ADMIN_USER" /var/lib/bootstrap-config-sync
   chown -R "$ADMIN_USER:$ADMIN_USER" /srv/stacks
 }
@@ -1200,7 +1200,7 @@ ensure_proxy_stack() {
   write_if_changed "/srv/stacks/proxy/compose.yaml" <<'EOF'
 services:
   caddy:
-    image: caddy:2
+    image: caddy:2.11.7
     restart: unless-stopped
     networks:
       edge:
@@ -1211,6 +1211,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./sites:/etc/caddy/sites:ro
+      - ./logs:/var/log/caddy
       - caddy_data:/data
       - caddy_config:/config
 
@@ -1227,9 +1228,37 @@ EOF
 {
   auto_https off
   admin off
+  log {
+    format filter {
+      wrap json
+      fields {
+        request delete
+      }
+    }
+  }
 }
 
 :80 {
+  log {
+    output file /var/log/caddy/access-retained.log {
+      roll_size 20MiB
+      roll_keep 8
+      roll_keep_for 168h
+    }
+    format filter {
+      wrap json
+      fields {
+        request>uri regexp "[?].*$" ""
+        request>headers>Authorization delete
+        request>headers>Proxy-Authorization delete
+        request>headers>X-Deploy-Token delete
+        request>headers>Cookie delete
+        request>headers>Set-Cookie delete
+        request>headers>Referer delete
+      }
+    }
+  }
+
   import /etc/caddy/sites/*.caddy
   respond "unconfigured host" 404
 }
@@ -1302,6 +1331,7 @@ start_stacks() {
   docker network inspect edge >/dev/null 2>&1 || true
   docker network create edge >/dev/null 2>&1 || true
   docker network inspect edge >/dev/null 2>&1 || fail "Docker network edge was not available after create"
+  docker compose -f /srv/stacks/proxy/compose.yaml pull caddy || return
   docker compose -f /srv/stacks/whoami/compose.yaml up -d
   docker compose -f /srv/stacks/proxy/compose.yaml up -d
   docker compose -f /srv/stacks/tunnel/compose.yaml up -d

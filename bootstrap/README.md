@@ -198,13 +198,32 @@ The same service also accepts `POST https://<DEPLOY_WEBHOOK_HOSTNAME>/sync-confi
 
 For config sync, the server keeps a dedicated checkout under `/var/lib/bootstrap-config-sync/<target>`, fetches that exact ref, copies the configured app-owned files into the live stack locations, restarts the shared proxy if the route changed, reapplies the app stack if the Compose file changed, and leaves the live `.env` untouched.
 
-When you add or update route files under `/srv/stacks/proxy/sites`, apply them by restarting the managed Caddy container instead of using `caddy reload`:
+## Proxy operations
+
+When you add or update route files under `/srv/stacks/proxy/sites`, validate and reload them on the host:
+
+```bash
+docker compose -f /srv/stacks/proxy/compose.yaml exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile &&
+docker compose -f /srv/stacks/proxy/compose.yaml exec -T caddy sh -c 'kill -USR1 1'
+```
+
+The managed image starts Caddy as PID 1 with `caddy run` and a config file. This [signal reload](https://caddyserver.com/docs/command-line#signals) works with `admin off`. Do not use it with `--resume` or after API config changes. Do not use `docker kill` for reload signals: it can set Docker's manual-stop flag even when Caddy keeps running ([Moby #41302](https://github.com/moby/moby/issues/41302)). Check the Caddy logs and an uncached route after the signal; signal delivery does not confirm that the reload succeeded.
+
+The proxy pins Caddy 2.11.7 and pulls that image before startup. Signal reload requires Caddy 2.11 or later. The proxy keeps `restart: unless-stopped`, so a deliberate stop remains in effect after Docker restarts. Start it again with `docker compose -f /srv/stacks/proxy/compose.yaml up -d`.
+
+Access logs are stored in `/srv/stacks/proxy/logs/access-retained.log`. Caddy rotates them at 20 MiB and keeps at most eight compressed archives, with a 168-hour archive age limit. Cleanup runs when Caddy creates a log file. Retained time depends on traffic; these limits do not guarantee seven days of history. The active file is not subject to the archive age limit. The filter removes query contents and these request headers: Authorization, Proxy-Authorization, X-Deploy-Token, Cookie, Set-Cookie, and Referer. It keeps request paths, status codes, and timing.
+
+Runtime logs omit request objects, including their raw URI and headers. They retain the error cause, status, and timing. This also covers reverse-proxy failures before an upstream responds.
+
+Changes to [file output options](https://caddyserver.com/docs/caddyfile/directives/log#file) for the same filename need a restart. Use the existing helper:
 
 ```bash
 ./bootstrap/local/restart-proxy.sh bootstrap/hosts/.env.production
 ```
 
-This bootstrap sets `admin off` in the managed Caddyfile, so the admin API reload endpoint is intentionally unavailable.
+## Tests
+
+Run `./tests/run.sh` for the shell tests. Run `python3 tests/test_proxy.py` with a local Docker context for the container integration test. The test creates and removes its own Compose project. It checks the generated configuration, redaction, signal reload, and restart state. It does not restart the Docker daemon or test retention over seven days.
 
 ## Manual GitHub Setup
 
