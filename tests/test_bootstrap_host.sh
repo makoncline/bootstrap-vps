@@ -95,6 +95,8 @@ TELEGRAM_CHAT_ID=123456
 HEALTHCHECK_DISK_PCT=90
 DEPLOY_WEBHOOK_HOSTNAME=deploy.example.com
 DEPLOY_WEBHOOK_TOKEN=deploy-token
+AI_PROXY_URL=http://100.64.0.2:8317/v1
+AI_PROXY_MODEL=test-model
 EOF
 
 cat >"$TMP_DIR/bad.env" <<'EOF'
@@ -146,6 +148,8 @@ grep -q 'TELEGRAM_CHAT_ID=123456' "$TMP_DIR/captured/host.env"
 grep -q 'HEALTHCHECK_DISK_PCT=90' "$TMP_DIR/captured/host.env"
 grep -q 'DEPLOY_WEBHOOK_HOSTNAME=deploy.example.com' "$TMP_DIR/captured/host.env"
 grep -q 'DEPLOY_WEBHOOK_TOKEN=deploy-token' "$TMP_DIR/captured/host.env"
+grep -q 'AI_PROXY_URL=http://100.64.0.2:8317/v1' "$TMP_DIR/captured/host.env"
+grep -q 'AI_PROXY_MODEL=test-model' "$TMP_DIR/captured/host.env"
 
 rm -f "$LOG_FILE"
 if PATH="$BIN_DIR:$PATH" TEST_SSH_LOG="$LOG_FILE" TEST_STATE_DIR="$TMP_DIR/state" \
@@ -156,3 +160,14 @@ if PATH="$BIN_DIR:$PATH" TEST_SSH_LOG="$LOG_FILE" TEST_STATE_DIR="$TMP_DIR/state
   exit 1
 fi
 ! grep -q 'lockdown-ssh.sh' "$LOG_FILE"
+
+sed '/^AI_PROXY_MODEL=/d' "$TMP_DIR/good.env" >"$TMP_DIR/bad-proxy.env"
+rm -f "$LOG_FILE"
+if PATH="$BIN_DIR:$PATH" TEST_SSH_LOG="$LOG_FILE" ADMIN_USER=admin \
+  AI_PROXY_URL=http://100.64.0.2:8317/v1 AI_PROXY_MODEL= \
+  BOOTSTRAP_SSH_KEY="$TMP_DIR/testkey" \
+  "$REPO_ROOT/bootstrap/local/bootstrap-host.sh" "$TMP_DIR/bad-proxy.env"; then
+  printf 'expected proxy validation failure\n' >&2
+  exit 1
+fi
+[ ! -f "$LOG_FILE" ]

@@ -129,6 +129,8 @@ write_runtime_env_file() {
   append_env HEALTHCHECK_DISK_PCT "${HEALTHCHECK_DISK_PCT:-}"
   append_env DEPLOY_WEBHOOK_HOSTNAME "${DEPLOY_WEBHOOK_HOSTNAME:-}"
   append_env DEPLOY_WEBHOOK_TOKEN "${DEPLOY_WEBHOOK_TOKEN:-}"
+  append_env AI_PROXY_URL "${AI_PROXY_URL:-}"
+  append_env AI_PROXY_MODEL "${AI_PROXY_MODEL:-}"
   append_env BOOTSTRAP_POST_REBOOT "$BOOTSTRAP_POST_REBOOT"
 }
 
@@ -151,6 +153,7 @@ require_var TAILSCALE_HOSTNAME
 require_var TUNNEL_TOKEN
 require_var TUNNEL_HOSTNAMES
 require_var SMOKE_HOSTNAME
+python3 "$REPO_ROOT/bootstrap/remote/ai-proxy.py" validate
 [ -n "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] || [ -z "${DEPLOY_WEBHOOK_TOKEN:-}" ] || fail "DEPLOY_WEBHOOK_TOKEN requires DEPLOY_WEBHOOK_HOSTNAME"
 [ -n "${DEPLOY_WEBHOOK_TOKEN:-}" ] || [ -z "${DEPLOY_WEBHOOK_HOSTNAME:-}" ] || fail "DEPLOY_WEBHOOK_HOSTNAME requires DEPLOY_WEBHOOK_TOKEN"
 [ -f "$BOOTSTRAP_SSH_KEY" ] || fail "SSH private key not found: $BOOTSTRAP_SSH_KEY"

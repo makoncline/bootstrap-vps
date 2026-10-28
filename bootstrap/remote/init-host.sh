@@ -18,7 +18,7 @@ REMOTE_INIT_REBOOT_REQUIRED_EXIT=42
 ensure_base_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y ca-certificates curl git jq python3 procps rsync sudo util-linux ufw unattended-upgrades zsh zsh-autosuggestions zsh-syntax-highlighting
+  apt-get install -y ca-certificates curl git jq python3 python3-tomlkit procps rsync sudo util-linux ufw unattended-upgrades zsh zsh-autosuggestions zsh-syntax-highlighting
 }
 
 ensure_system_upgrades() {
@@ -279,6 +279,9 @@ ensure_codex_home_files() {
   if [ -f "$source_dir/config.toml" ] && [ ! -f "$target_dir/config.toml" ]; then
     install -o "$ADMIN_USER" -g "$ADMIN_USER" -m 644 "$source_dir/config.toml" "$target_dir/config.toml"
   fi
+
+  install -m 755 "$SCRIPT_DIR/ai-proxy.py" /usr/local/bin/bootstrap-ai-proxy
+  runuser -u "$ADMIN_USER" -- /usr/local/bin/bootstrap-ai-proxy configure --config "$target_dir/config.toml"
 }
 
 ensure_swapfile() {
@@ -1400,6 +1403,8 @@ if [ -z "${BOOTSTRAP_ACTION_ID:-}" ]; then
   fi
   exec python3 "$SCRIPT_DIR/run_action.py" "${BOOTSTRAP_OPERATION:-bootstrap}" host "$0" "$ENV_FILE"
 fi
+
+python3 "$SCRIPT_DIR/ai-proxy.py" validate
 
 log "Installing base packages"
 ensure_base_packages

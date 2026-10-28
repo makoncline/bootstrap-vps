@@ -98,7 +98,7 @@ BOOTSTRAP_SSH_KEY=/path/to/key ./bootstrap/local/reconcile-host.sh bootstrap/hos
 
 The bootstrap installs Codex CLI using `npm i -g @openai/codex`, matching the official OpenAI CLI setup docs.
 
-After bootstrap, authenticate interactively over Tailscale:
+For direct ChatGPT access, authenticate interactively over Tailscale after bootstrap:
 
 ```bash
 ./bootstrap/local/codex-login.sh bootstrap/hosts/.env.production
@@ -198,6 +198,39 @@ The same service also accepts `POST https://<DEPLOY_WEBHOOK_HOSTNAME>/sync-confi
 
 For config sync, the server keeps a dedicated checkout under `/var/lib/bootstrap-config-sync/<target>`, fetches that exact ref, validates the app-owned files, reapplies changed Compose configuration, activates and checks the proxy route, and leaves the live `.env` untouched.
 
+## AI proxy over Tailscale
+
+Set `AI_PROXY_URL` and `AI_PROXY_MODEL` in the private host env file to use CLIProxy on another tailnet machine. Both settings are blank in the example file. Use the full MagicDNS name ending in `.ts.net`, a Tailscale IP, or loopback for a local test. The URL must end in `/v1`. Select an exact model ID from that proxy's `/v1/models` endpoint.
+
+During bootstrap or reconcile, these settings select the `cli_proxy` provider and model in the admin user's `~/.codex/config.toml`. Other settings and comments stay in place. TOML Kit handles the config update; Ubuntu installs it as `python3-tomlkit`. The provider uses HTTP Responses streaming and sends no client API key. It does not use Codex login credentials. This follows the [Codex custom provider settings](https://learn.chatgpt.com/docs/config-file/config-reference).
+
+Leave both fields blank to keep the current Codex config. Blank fields do not remove a proxy that was already configured. To stop using that proxy, edit the user's Codex config explicitly. Partial or invalid settings stop the local helper before SSH starts. Setup does not require the proxy to be online.
+
+On a configured server, run as the admin user:
+
+```bash
+bootstrap-ai-proxy check
+```
+
+This checks the model list without credentials, inherited HTTP proxies, or redirects. It reports `inference_verified: false`: a model list does not prove that upstream authorization works. To test a real request, run `codex exec --ephemeral --skip-git-repo-check --sandbox read-only 'Reply exactly PROXY_OK. Do not use tools.'` in an empty test directory. This request uses the proxy's upstream account.
+
+On the proxy machine, bind inference to its Tailscale IP and allow only the required clients and port in the [tailnet grants](https://tailscale.com/docs/reference/syntax/policy-file). Keep the listener off the public network. HTTP over the Tailscale address uses the encrypted tailnet connection. For Docker, publish the port on that Tailscale IP, not on all host interfaces.
+
+For [CLIProxyAPI v8.0.45](https://github.com/router-for-me/CLIProxyAPI/blob/v8.0.45/config.example.yaml), use `access.api-keys: []` for no extra client token. Keep `management.secret-key` empty and the control panel disabled. Do not supply a management password through the environment or TUI. Set `server.commercial-mode: true` to omit the detailed request logging middleware; `observability.logs.request-log: false` alone still permits failed-request body capture in this version. Keep debug and profiling off. Configure upstream provider access on that machine. These client settings do not copy subscription credentials to the VPS or configure other AI clients.
+
+To test on a Mac without changing its normal Codex home:
+
+```bash
+# Install TOML Kit in a temporary Python virtual environment first.
+export CODEX_HOME="$(mktemp -d)"
+AI_PROXY_URL=http://127.0.0.1:8317/v1 AI_PROXY_MODEL='replace-with-model-id' \
+  python3 bootstrap/remote/ai-proxy.py configure
+python3 bootstrap/remote/ai-proxy.py check
+# Run the Codex smoke request above in an empty directory.
+```
+
+Use this temporary `CODEX_HOME` only in the test shell. Keep the real proxy URL and model in private host settings. Applying these changes to an existing VPS remains a separate operation.
+
 ## Proxy operations
 
 Use the same confirmed activation path as config sync:
@@ -224,7 +257,7 @@ Changes to [file output options](https://caddyserver.com/docs/caddyfile/directiv
 
 ## Tests
 
-Run `./tests/run.sh` for the shell tests. Run `python3 tests/test_proxy.py` with a local Docker context for the container integration test. The test creates and removes its own Compose project. It checks the generated configuration, redaction, signal reload, and restart state. It does not restart the Docker daemon or test retention over seven days.
+Run `./tests/run.sh` for the shell and Python tests. Python needs TOML Kit (`sudo apt-get install python3-tomlkit` on Ubuntu, or install `tomlkit` in a Python virtual environment on macOS). Run `python3 tests/test_proxy.py` with a local Docker context for the container integration test. The test creates and removes its own Compose project. It checks the generated configuration, redaction, signal reload, and restart state. It does not restart the Docker daemon or test retention over seven days.
 
 ## Manual GitHub Setup
 

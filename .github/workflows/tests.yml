@@ -13,6 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tomlkit
       - run: ./tests/run.sh
       - run: python3 tests/test_ssh.py
       - run: python3 tests/test_proxy.py

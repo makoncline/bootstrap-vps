@@ -15,6 +15,7 @@ The host setup uses:
 - a minimal interactive `zsh` setup for the admin user
 - Cursor remote terminal sandbox support for Ubuntu/AppArmor hosts
 - Codex CLI defaults plus repo-managed skills on the server
+- optional Codex routing through CLIProxy on another tailnet machine
 
 ## What it does
 
@@ -27,6 +28,8 @@ cp bootstrap/hosts/.env.example bootstrap/hosts/.env.production
 ./bootstrap/local/bootstrap-host.sh bootstrap/hosts/.env.production
 ./bootstrap/local/codex-login.sh bootstrap/hosts/.env.production
 ```
+
+For CLIProxy, set `AI_PROXY_URL` and `AI_PROXY_MODEL` in the private host env file before setup. Both are blank in the repo. See [AI proxy setup](bootstrap/README.md#ai-proxy-over-tailscale). Codex does not need a separate login in this mode.
 
 Useful follow-ups:
 

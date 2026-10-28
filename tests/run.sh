@@ -5,6 +5,7 @@ REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 
 bash "$REPO_ROOT/tests/test_admin_keys.sh"
 bash "$REPO_ROOT/tests/test_admin_helpers.sh"
+python3 "$REPO_ROOT/tests/test_ai_proxy.py"
 python3 "$REPO_ROOT/tests/test_deploy.py"
 python3 "$REPO_ROOT/tests/test_action.py"
 python3 "$REPO_ROOT/tests/test_webhook.py"
