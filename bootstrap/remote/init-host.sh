@@ -490,10 +490,6 @@ notify_message() {
   /usr/local/bin/notify "$message" >/dev/null 2>&1 || true
 }
 
-schedule_proxy_restart() {
-  nohup bash -lc 'sleep 2; docker compose -f /srv/stacks/proxy/compose.yaml restart caddy >/dev/null 2>&1' >/dev/null 2>&1 &
-}
-
 strip_optional_quotes() {
   local value
   value=$1
@@ -617,7 +613,7 @@ keep_image_count=${KEEP_IMAGE_COUNT:-0}
 [ -f "$compose_file" ] || fail "Compose file not found: $compose_file"
 [ -f "$stack_env_file" ] || fail "Stack env file not found: $stack_env_file"
 
-state_dir="$HOME/.local/state/bootstrap-deploy"
+state_dir="$HOME/.local/state/bootstrap-actions"
 mkdir -p "$state_dir"
 lock_file="$state_dir/$target.lock"
 exec 9>"$lock_file"
@@ -691,10 +687,6 @@ notify_message() {
   /usr/local/bin/notify "$message" >/dev/null 2>&1 || true
 }
 
-schedule_proxy_restart() {
-  nohup bash -lc 'sleep 2; docker compose -f /srv/stacks/proxy/compose.yaml restart caddy >/dev/null 2>&1' >/dev/null 2>&1 &
-}
-
 copy_if_changed() {
   local source target
   source=$1
@@ -707,29 +699,14 @@ copy_if_changed() {
   return 0
 }
 
-smoke_check() {
-  local smoke_url attempts
-  smoke_url=$1
-  [ -n "$smoke_url" ] || return 0
-  attempts=24
-  while [ "$attempts" -gt 0 ]; do
-    if curl --fail --silent --show-error --max-time 20 "$smoke_url" >/dev/null; then
-      return 0
-    fi
-    attempts=$((attempts - 1))
-    sleep 5
-  done
-  return 1
-}
-
 run_compose_apply() {
   local stack_dir compose_dest stack_env_file
   stack_dir=$1
   compose_dest=$2
   stack_env_file=$3
   (
-    cd "$stack_dir"
-    env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_dest" up -d
+    cd "$stack_dir" || return
+    env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_dest" up -d --remove-orphans
   )
 }
 
@@ -783,7 +760,7 @@ smoke_url=${SMOKE_URL:-}
 [ -n "$repo_url" ] || fail "REPO_URL is missing in $target_env"
 [ -f "$stack_env_file" ] || fail "Stack env file not found: $stack_env_file"
 
-state_dir="$HOME/.local/state/bootstrap-config-sync"
+state_dir="$HOME/.local/state/bootstrap-actions"
 mkdir -p "$state_dir"
 lock_file="$state_dir/$target.lock"
 exec 9>"$lock_file"
@@ -801,37 +778,42 @@ route_src="$source_dir/caddy-route.caddy"
 [ -f "$compose_src" ] || fail "Missing compose.yaml in $source_dir"
 [ -f "$route_src" ] || fail "Missing caddy-route.caddy in $source_dir"
 
+env -u IMAGE_TAG docker compose --project-directory "$stack_dir" --env-file "$stack_env_file" -f "$compose_src" config --quiet
+backup=$(mktemp -d)
+trap 'rm -rf "$backup"' EXIT
+compose_existed=0
+if [ -f "$compose_dest" ]; then
+  compose_existed=1
+  cp "$compose_dest" "$backup/compose.yaml"
+fi
 compose_changed=0
-route_changed=0
 if copy_if_changed "$compose_src" "$compose_dest"; then
   compose_changed=1
 fi
-if copy_if_changed "$route_src" "$route_dest"; then
-  route_changed=1
-fi
 
-if [ "$compose_changed" = "1" ]; then
-  run_compose_apply "$stack_dir" "$compose_dest" "$stack_env_file"
-fi
+restore_compose() {
+  [ "$compose_changed" = 1 ] || return 0
+  if [ "$compose_existed" = 1 ]; then
+    cat "$backup/compose.yaml" > "$compose_dest"
+    run_compose_apply "$stack_dir" "$compose_dest" "$stack_env_file"
+  else
+    (cd "$stack_dir" && env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_dest" down) || return
+    rm -f "$compose_dest"
+  fi
+}
 
-if ! smoke_check "$smoke_url"; then
-  notify_message "${sync_name} config sync failed
-git ref: ${git_ref}
-compose changed: ${compose_changed}
-route changed: ${route_changed}
-url: ${smoke_url:-n/a}"
+if { [ "$compose_changed" = 1 ] && ! run_compose_apply "$stack_dir" "$compose_dest" "$stack_env_file"; } ||
+   ! /usr/local/bin/bootstrap-apply-proxy --smoke-url "$smoke_url" "$route_src" "$route_dest"; then
+  restore_compose || printf 'Previous Compose configuration could not be restored\n' >&2
+  notify_message "${sync_name} config sync failed"
   exit 1
 fi
 
 notify_message "${sync_name} config sync successful
 git ref: ${git_ref}
 compose changed: ${compose_changed}
-route changed: ${route_changed}
 url: ${smoke_url:-n/a}"
 
-if [ "$route_changed" = "1" ]; then
-  schedule_proxy_restart
-fi
 EOF
   chmod 755 /usr/local/bin/bootstrap-sync-config.sh
 
@@ -1392,8 +1374,10 @@ ensure_proxy_stack
 ensure_tunnel_stack
 ensure_whoami_stack
 sync_stack_permissions
+install -m 755 "$SCRIPT_DIR/apply-proxy.py" /usr/local/bin/bootstrap-apply-proxy
 log "Starting Docker stacks"
 start_stacks
+/usr/local/bin/bootstrap-apply-proxy
 log "Installing monitoring scripts and timer"
 ensure_monitoring_config
 ensure_deploy_webhook_config

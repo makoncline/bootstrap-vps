@@ -42,7 +42,7 @@ Useful follow-ups:
 ./bootstrap/local/test-config-sync-webhook.sh bootstrap/hosts/.env.production daylilycatalog <git-sha>
 ```
 
-For Caddy route changes, use the [validated signal reload](bootstrap/README.md#proxy-operations). Use `bootstrap/local/restart-proxy.sh` when log file output changes require a restart. The admin API is disabled.
+For Caddy route changes, use the [confirmed proxy activation](bootstrap/README.md#proxy-operations). Use `bootstrap/local/restart-proxy.sh` when log file output changes require a restart. The admin API is disabled.
 
 If you enable `DEPLOY_WEBHOOK_HOSTNAME` and `DEPLOY_WEBHOOK_TOKEN` in [`bootstrap/hosts/.env.example`](/Users/makon/dev/servers/bootstrap/hosts/.env.example), bootstrap will also install a small authenticated deploy webhook on the server. App repos can call it after a successful image push.
 

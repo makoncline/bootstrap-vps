@@ -39,6 +39,7 @@ with tempfile.TemporaryDirectory(prefix="bootstrap-proxy-") as directory:
     config = json.loads(docker(*compose, "config", "--format", "json"))
     # Use an isolated network; keep the generated service and volume settings.
     config["networks"]["edge"] = {}
+    config["services"]["caddy"]["ports"] = ["127.0.0.1::80"]
     (root / "compose.json").write_text(json.dumps(config))
     compose[-1] = str(root / "compose.json")
     image = config["services"]["caddy"]["image"]
@@ -106,6 +107,66 @@ with tempfile.TemporaryDirectory(prefix="bootstrap-proxy-") as directory:
         assert after["State"]["StartedAt"] == before["State"]["StartedAt"]
         assert after["RestartCount"] == before["RestartCount"] == 0
 
+        origin = "http://" + docker(*compose, "port", "caddy", "80")
+        candidate = root / "candidate.caddy"
+        candidate.write_text('handle /probe {\n  respond "after {http.request.uri}"\n}\n')
+        apply = ["python3", str(Path(__file__).resolve().parents[1] / "bootstrap/remote/apply-proxy.py"),
+                 "--compose", str(root / "compose.json"), "--smoke-url", origin + "/probe", str(candidate), str(route)]
+        subprocess.run(apply, check=True)
+        previous = route.read_text()
+        candidate.write_text('this-is-not-a-caddy-directive\n')
+        assert subprocess.run(apply).returncode == 1
+        assert route.read_text() == previous
+        expect_response("after")
+        candidate.write_text('handle /probe {\n  respond "unhealthy" 500\n}\n')
+        assert subprocess.run(apply).returncode == 1
+        assert route.read_text() == previous
+        expect_response("after")
+        candidate.write_text(previous)
+        subprocess.run(apply, check=True)
+
+        # Run config sync against a local Git fixture and the real proxy.
+        repo = root / "repo"
+        files = repo / "deploy/vps"
+        files.mkdir(parents=True)
+        app_compose = 'services:\n  example:\n    image: caddy:2.11.7\n'
+        (files / "compose.yaml").write_text(app_compose)
+        (files / "caddy-route.caddy").write_text(previous)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], check=True)
+        app = root / "app"
+        app.mkdir()
+        (app / "compose.yaml").write_text(app_compose)
+        (app / ".env").write_text("")
+        targets = root / "targets"
+        targets.mkdir()
+        (targets / "example.env").write_text(f"REPO_URL={repo}\nSTACK_DIR={app}\nROUTE_DEST={route}\nCHECKOUT_DIR={root}/checkout\nSMOKE_URL={origin}/probe\n")
+        tools = root / "bin"
+        tools.mkdir()
+        helper = tools / "apply"
+        helper.write_text((Path(__file__).resolve().parents[1] / "bootstrap/remote/apply-proxy.py").read_text().replace("/srv/stacks/proxy/compose.yaml", str(root / "compose.json")))
+        helper.chmod(0o755)
+        (tools / "flock").write_text("#!/bin/sh\nexit 0\n")
+        (tools / "flock").chmod(0o755)
+        (tools / "notify").write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{root}/notifications"\n')
+        (tools / "notify").chmod(0o755)
+        sync = source.split('write_if_changed "/usr/local/bin/bootstrap-sync-config.sh" <<\'EOF\'\n', 1)[1].split("\nEOF", 1)[0]
+        sync = sync.replace("/etc/bootstrap/config-sync", str(targets)).replace("/usr/local/bin/bootstrap-apply-proxy", str(helper)).replace("/usr/local/bin/notify", str(tools / "notify"))
+        (root / "sync.sh").write_text(sync)
+        fixture_env = dict(os.environ, HOME=str(root), DOCKER_CONFIG=os.environ.get("DOCKER_CONFIG", str(Path.home() / ".docker")), PATH=f"{tools}:{os.environ['PATH']}")
+        subprocess.run(["bash", str(root / "sync.sh"), "example", "HEAD"], check=True, env=fixture_env)
+        assert "config sync successful" in (root / "notifications").read_text()
+        expect_response("after")
+        (files / "caddy-route.caddy").write_text("invalid-directive\n")
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "invalid route"], check=True)
+        (root / "notifications").write_text("")
+        assert subprocess.run(["bash", str(root / "sync.sh"), "example", "HEAD"], env=fixture_env).returncode == 1
+        assert "successful" not in (root / "notifications").read_text()
+        assert route.read_text() == previous
+        expect_response("after")
+
         failed = subprocess.run(["docker", "exec", container, "wget", "-qO-",
                                  "--header", f"Authorization: {marker}", f"http://localhost/missing?secret={marker}"],
                                 capture_output=True, text=True)
@@ -121,7 +182,7 @@ with tempfile.TemporaryDirectory(prefix="bootstrap-proxy-") as directory:
         for entry in entries:
             assert entry["request"]["uri"] in ("/probe", "/missing", "/unreachable")
             assert entry["request"]["method"] == "GET"
-            assert entry["status"] in (200, 404, 502)
+            assert entry["status"] in (200, 404, 500, 502)
             assert "duration" in entry
             assert not set(sensitive).intersection(entry["request"]["headers"])
         print("PASS: generated proxy config, log redaction, reload, and restart state")

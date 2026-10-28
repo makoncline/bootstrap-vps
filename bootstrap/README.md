@@ -196,16 +196,17 @@ The same service also accepts `POST https://<DEPLOY_WEBHOOK_HOSTNAME>/sync-confi
 - `Authorization: Bearer <DEPLOY_WEBHOOK_TOKEN>`
 - JSON body like `{"git_ref":"<commit-sha>"}`.
 
-For config sync, the server keeps a dedicated checkout under `/var/lib/bootstrap-config-sync/<target>`, fetches that exact ref, copies the configured app-owned files into the live stack locations, restarts the shared proxy if the route changed, reapplies the app stack if the Compose file changed, and leaves the live `.env` untouched.
+For config sync, the server keeps a dedicated checkout under `/var/lib/bootstrap-config-sync/<target>`, fetches that exact ref, validates the app-owned files, reapplies changed Compose configuration, activates and checks the proxy route, and leaves the live `.env` untouched.
 
 ## Proxy operations
 
-When you add or update route files under `/srv/stacks/proxy/sites`, validate and reload them on the host:
+Use the same confirmed activation path as config sync:
 
 ```bash
-docker compose -f /srv/stacks/proxy/compose.yaml exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile &&
-docker compose -f /srv/stacks/proxy/compose.yaml exec -T caddy sh -c 'kill -USR1 1'
+sudo /usr/local/bin/bootstrap-apply-proxy --smoke-url https://app.example.com /path/to/new-route.caddy /srv/stacks/proxy/sites/20-example.caddy
 ```
+
+The command serializes updates, validates the candidate, waits for Caddy to confirm its reload, and checks the route. On failure, it restores and reactivates the previous route. Without source and destination arguments, it validates and activates the current configuration.
 
 The managed image starts Caddy as PID 1 with `caddy run` and a config file. This [signal reload](https://caddyserver.com/docs/command-line#signals) works with `admin off`. Do not use it with `--resume` or after API config changes. Do not use `docker kill` for reload signals: it can set Docker's manual-stop flag even when Caddy keeps running ([Moby #41302](https://github.com/moby/moby/issues/41302)). Check the Caddy logs and an uncached route after the signal; signal delivery does not confirm that the reload succeeded.
 
