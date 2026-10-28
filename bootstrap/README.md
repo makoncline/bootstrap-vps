@@ -202,7 +202,7 @@ For config sync, the server keeps a dedicated checkout under `/var/lib/bootstrap
 
 Set `AI_PROXY_URL` and `AI_PROXY_MODEL` in the private host env file to use CLIProxy on another tailnet machine. Both settings are blank in the example file. Use the full MagicDNS name ending in `.ts.net`, a Tailscale IP, or loopback for a local test. The URL must end in `/v1`. Select an exact model ID from that proxy's `/v1/models` endpoint.
 
-During bootstrap or reconcile, these settings select the `cli_proxy` provider and model in the admin user's `~/.codex/config.toml`. Other settings and comments stay in place. TOML Kit handles the config update; Ubuntu installs it as `python3-tomlkit`. The provider uses HTTP Responses streaming and sends no client API key. It does not use Codex login credentials. This follows the [Codex custom provider settings](https://learn.chatgpt.com/docs/config-file/config-reference).
+During bootstrap or reconcile, these settings select the `cli_proxy` provider and model in the admin user's `~/.codex/config.toml`. Other settings, comments, and config symlinks stay in place. TOML Kit handles the config update; Ubuntu installs it as `python3-tomlkit`. The provider uses HTTP Responses streaming and sends no client API key. It does not use Codex login credentials. This follows the [Codex custom provider settings](https://learn.chatgpt.com/docs/config-file/config-reference).
 
 Leave both fields blank to keep the current Codex config. Blank fields do not remove a proxy that was already configured. To stop using that proxy, edit the user's Codex config explicitly. Partial or invalid settings stop the local helper before SSH starts. Setup does not require the proxy to be online.
 
@@ -212,7 +212,7 @@ On a configured server, run as the admin user:
 bootstrap-ai-proxy check
 ```
 
-This checks the model list without credentials, inherited HTTP proxies, or redirects. It reports `inference_verified: false`: a model list does not prove that upstream authorization works. To test a real request, run `codex exec --ephemeral --skip-git-repo-check --sandbox read-only 'Reply exactly PROXY_OK. Do not use tools.'` in an empty test directory. This request uses the proxy's upstream account.
+This checks the model list with a five-second transfer limit and a 1 MiB response limit. It does not load curl settings, send credentials, use HTTP proxies, or follow redirects. It reports `inference_verified: false`: a model list does not prove that upstream authorization works. To test a real request, run `codex exec --ephemeral --skip-git-repo-check --sandbox read-only 'Reply exactly PROXY_OK. Do not use tools.'` in an empty test directory. This request uses the proxy's upstream account.
 
 On the proxy machine, bind inference to its Tailscale IP and allow only the required clients and port in the [tailnet grants](https://tailscale.com/docs/reference/syntax/policy-file). Keep the listener off the public network. HTTP over the Tailscale address uses the encrypted tailnet connection. For Docker, publish the port on that Tailscale IP, not on all host interfaces.
 

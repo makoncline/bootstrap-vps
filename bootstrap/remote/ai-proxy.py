@@ -5,10 +5,9 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
-import urllib.error
 import urllib.parse
-import urllib.request
 
 
 class ProxyError(ValueError):
@@ -30,7 +29,7 @@ def proxy_url(value):
         raise ProxyError('Use a tailnet or loopback HTTP(S) URL ending in /v1, without credentials or query parameters')
     if url.port is not None and not 1 <= url.port <= 65535:
         raise ProxyError('Use a valid proxy port')
-    return value.rstrip('/')
+    return url.geturl().rstrip('/')
 
 
 def validate(url, model):
@@ -44,6 +43,7 @@ def validate(url, model):
 def configure(path, url, model):
     import tomlkit
 
+    path = path.resolve()
     content = path.read_text() if path.exists() else ''
     config = tomlkit.parse(content)
     config['model_provider'] = 'cli_proxy'
@@ -72,11 +72,6 @@ def configure(path, url, model):
             temporary.unlink(missing_ok=True)
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 def check(path):
     import tomllib
 
@@ -86,17 +81,16 @@ def check(path):
     provider = config['model_providers']['cli_proxy']
     url = proxy_url(provider['base_url'])
     model = config['model']
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    try:
-        with opener.open(url + '/models', timeout=5) as response:
-            data = response.read(1024 * 1024 + 1)
-            if len(data) > 1024 * 1024:
-                raise ProxyError('Proxy model response exceeds 1 MiB')
-            catalog = json.loads(data)
-    except urllib.error.HTTPError as error:
-        raise ProxyError(f'Proxy model check returned HTTP {error.code}') from None
-    except urllib.error.URLError:
-        raise ProxyError('Cannot reach the proxy model endpoint; check Tailscale, the listener, and tailnet grants') from None
+    response = subprocess.run(
+        ['curl', '--disable', '--globoff', '--silent', '--noproxy', '*', '--max-time', '5',
+         '--max-filesize', '1048576', '--write-out', '\n%{http_code}', url + '/models'],
+        capture_output=True, timeout=6)
+    if response.returncode:
+        raise ProxyError('Proxy model check failed; check the connection, response size, and tailnet grants')
+    data, _, status = response.stdout.rpartition(b'\n')
+    if status != b'200':
+        raise ProxyError(f'Proxy model check returned HTTP {status.decode("ascii")}')
+    catalog = json.loads(data)
     if not isinstance(catalog, dict) or not isinstance(catalog.get('data'), list):
         raise ProxyError('Proxy returned an invalid model catalog')
     if not any(isinstance(item, dict) and item.get('id') == model for item in catalog['data']):
@@ -108,7 +102,8 @@ def check(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('validate', 'configure', 'check'))
-    parser.add_argument('--config', type=Path, default=Path(os.environ.get('CODEX_HOME', Path.home() / '.codex')) / 'config.toml')
+    parser.add_argument('--config', type=Path,
+                        default=Path(os.environ.get('CODEX_HOME', Path.home() / '.codex')) / 'config.toml')
     args = parser.parse_args()
     try:
         if args.command == 'check':
@@ -120,7 +115,7 @@ def main():
                 configure(args.config, url, model)
     except ProxyError as error:
         raise SystemExit(str(error)) from None
-    except (ValueError, OSError, KeyError, TypeError):
+    except (ValueError, OSError, KeyError, TypeError, subprocess.TimeoutExpired):
         # Configs and error responses can contain credentials. Keep them out of output.
         raise SystemExit('AI proxy check or configuration failed. Check the URL, model, config syntax, and tailnet access.') from None
 

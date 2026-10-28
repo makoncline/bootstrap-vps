@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,8 @@ class Proxy(BaseHTTPRequestHandler):
     status = 200
     model = 'test-model'
     requests = []
+    slow = False
+    oversized = False
 
     def do_GET(self):
         self.requests.append((self.path, dict(self.headers)))
@@ -25,8 +28,19 @@ class Proxy(BaseHTTPRequestHandler):
         if self.status == 302:
             self.send_header('Location', '/must-not-follow')
         self.end_headers()
-        self.wfile.write(json.dumps({'data': [{'id': self.model}],
-                                   'error': 'private-error-marker'}).encode())
+        data = (b'x' * (1024 * 1024 + 1) if self.oversized else
+                json.dumps({'data': [{'id': self.model}],
+                            'error': 'private-error-marker'}).encode())
+        try:
+            if self.slow:
+                for byte in data:
+                    self.wfile.write(bytes([byte]))
+                    self.wfile.flush()
+                    time.sleep(0.1)
+            else:
+                self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def log_message(self, *args):
         pass
@@ -37,8 +51,10 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-ai-') as directory:
     server = ThreadingHTTPServer(('127.0.0.1', 0), Proxy)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
+    (Path(directory) / '.curlrc').write_text('header = "Authorization: Bearer must-not-send"\nlocation\n')
     env = dict(os.environ, AI_PROXY_URL=f'http://127.0.0.1:{server.server_port}/v1/',
                AI_PROXY_MODEL='test-model', OPENAI_API_KEY='must-not-send',
+               CURL_HOME=directory,
                HTTP_PROXY='http://127.0.0.1:1', HTTPS_PROXY='http://127.0.0.1:1')
 
     def run(command, **values):
@@ -59,7 +75,9 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-ai-') as directory:
                     'http://[fd7a:115c:a1e0::2]:8317/v1']:
             assert run('validate', AI_PROXY_URL=url).returncode == 0
 
-        config.write_text('# Keep this comment.\nmodel = "old-model"\n'
+        target = Path(directory) / 'settings.toml'
+        config.symlink_to(target.name)
+        target.write_text('# Keep this comment.\nmodel = "old-model"\n'
                           '[sandbox_workspace_write]\nnetwork_access = true\n'
                           '[projects."/srv/project"]\ntrust_level = "trusted"\n'
                           '[model_providers.other]\nname = "Other"\n'
@@ -67,6 +85,7 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-ai-') as directory:
                           'http_headers = { Authorization = "old-secret" }\n')
         config.chmod(0o600)
         assert run('configure').returncode == 0
+        assert config.is_symlink() and target.read_text() == config.read_text()
         content = config.read_text()
         parsed = tomllib.loads(content)
         assert '# Keep this comment.' in content and 'old-secret' not in content
@@ -88,6 +107,10 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-ai-') as directory:
         assert json.loads(result.stdout)['inference_verified'] is False
         assert Proxy.requests[-1][0] == '/v1/models'
         assert 'Authorization' not in Proxy.requests[-1][1]
+        for suffix in ['?', '#']:
+            assert run('configure', AI_PROXY_URL=env['AI_PROXY_URL'].rstrip('/') + suffix).returncode == 0
+            assert run('check').returncode == 0
+            assert Proxy.requests[-1][0] == '/v1/models'
         Proxy.model = 'other-model'
         assert run('check').returncode != 0
         for status in [401, 302]:
@@ -97,6 +120,16 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-ai-') as directory:
             assert result.returncode != 0 and str(status) in result.stderr
             assert 'private-error-marker' not in result.stdout + result.stderr
             assert len(Proxy.requests) == count + 1
+
+        Proxy.status, Proxy.model = 200, 'test-model'
+        Proxy.oversized = True
+        assert run('check').returncode != 0
+        Proxy.oversized = False
+        Proxy.slow = True
+        started = time.monotonic()
+        result = run('check')
+        assert result.returncode != 0 and 4 < time.monotonic() - started < 7
+        Proxy.slow = False
 
         assert run('configure', AI_PROXY_URL='http://100.64.0.3:8317/v1',
                    AI_PROXY_MODEL='replacement-model').returncode == 0
