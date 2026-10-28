@@ -3,6 +3,8 @@ set -euo pipefail
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 
+bash "$REPO_ROOT/tests/test_admin_keys.sh"
+bash "$REPO_ROOT/tests/test_admin_helpers.sh"
 "$REPO_ROOT/tests/test_bootstrap_host.sh"
 "$REPO_ROOT/tests/test_cloudflare_tunnel.sh"
 "$REPO_ROOT/tests/test_configure_config_sync.sh"

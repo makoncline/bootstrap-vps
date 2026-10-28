@@ -20,7 +20,7 @@ log "Launching Codex login on $ADMIN_USER@$TAILSCALE_HOSTNAME"
 exec ssh \
   -t \
   -o ConnectTimeout=10 \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null \
+  -o StrictHostKeyChecking=accept-new \
+  -o ForwardAgent=no \
   "$ADMIN_USER@$TAILSCALE_HOSTNAME" \
   'command -v codex >/dev/null 2>&1 || { echo "codex is not installed on this server"; exit 1; }; codex login --device-auth'

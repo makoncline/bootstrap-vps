@@ -29,7 +29,7 @@ log "Syncing Codex skills to $ADMIN_USER@$TAILSCALE_HOSTNAME"
 tar_skills_to_stdout | \
   ssh \
     -o ConnectTimeout=10 \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
+    -o StrictHostKeyChecking=accept-new \
+    -o ForwardAgent=no \
     "$ADMIN_USER@$TAILSCALE_HOSTNAME" \
     "mkdir -p ~/.codex/skills && tar -xzf - -C ~/.codex/skills --strip-components=1"

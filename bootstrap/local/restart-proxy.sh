@@ -31,7 +31,7 @@ require_var TAILSCALE_HOSTNAME
 ssh \
   -o BatchMode=yes \
   -o ConnectTimeout=10 \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null \
+  -o StrictHostKeyChecking=accept-new \
+  -o ForwardAgent=no \
   "$ADMIN_USER@$TAILSCALE_HOSTNAME" \
   "docker compose -f /srv/stacks/proxy/compose.yaml restart caddy && docker compose -f /srv/stacks/proxy/compose.yaml ps"

@@ -70,8 +70,8 @@ EOF
 ssh \
   -o BatchMode=yes \
   -o ConnectTimeout=10 \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null \
+  -o StrictHostKeyChecking=accept-new \
+  -o ForwardAgent=no \
   "$ADMIN_USER@$TAILSCALE_HOSTNAME" \
   "sudo install -d -m 750 -o root -g '$ADMIN_USER' /etc/bootstrap/config-sync && sudo tee '/etc/bootstrap/config-sync/$TARGET.env' >/dev/null && sudo chown root:'$ADMIN_USER' '/etc/bootstrap/config-sync/$TARGET.env' && sudo chmod 640 '/etc/bootstrap/config-sync/$TARGET.env'" \
   <"$TARGET_FILE"

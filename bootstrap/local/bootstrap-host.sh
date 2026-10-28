@@ -252,6 +252,7 @@ if [ "$BOOTSTRAP_SKIP_LOCKDOWN" = "0" ]; then
   ssh_cmd "root@$PUBLIC_SSH_TARGET" "'$REMOTE_DIR/remote/lockdown-ssh.sh' '$REMOTE_DIR/host.env'"
   expect_public_ssh_closed "root@$PUBLIC_SSH_TARGET"
   expect_public_ssh_closed "$ADMIN_USER@$PUBLIC_SSH_TARGET"
+  verify_tailscale_access
 fi
 
 if [ "$BOOTSTRAP_SKIP_SMOKE_CHECK" = "0" ]; then

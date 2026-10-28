@@ -51,7 +51,7 @@ fi
 ssh \
   -o BatchMode=yes \
   -o ConnectTimeout=10 \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null \
+  -o StrictHostKeyChecking=accept-new \
+  -o ForwardAgent=no \
   "$ADMIN_USER@$TAILSCALE_HOSTNAME" \
   "$remote_cmd"
