@@ -1,0 +1,320 @@
+#!/usr/bin/python3 -I
+"""Render Daylily's 1Password environment; apply only when explicitly requested.
+
+All external command output is captured. Diagnostics never contain values,
+hashes, raw subprocess errors, or exception text that might contain secrets.
+"""
+import contextlib
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import resource
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+STACK = Path('/srv/stacks/daylilycatalog')
+TOKEN = Path('/etc/bootstrap/op/daylilycatalog.token')
+ENVIRONMENT = 'kbms3dbpzhwvwiicxcnuh64uoa'
+SCRIPT = Path('/usr/local/bin/daylily-env-sync')
+LOCK = Path('/home/makon/.local/state/bootstrap-deploy/daylilycatalog.lock')
+CLEAN_ENV = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C.UTF-8'}
+NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+IMAGE_TAG_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
+BACKUP_NAME = re.compile(r'\.env\.before-1password-\d{8}T\d{6}\.\d{6}Z\Z')
+
+
+class SyncError(Exception):
+    """Only fixed, value-free messages may be used here."""
+
+
+def run(args, *, env=None, data=None, timeout=120, cwd=None):
+    return subprocess.run(
+        [str(arg) for arg in args], input=data, capture_output=True,
+        env=CLEAN_ENV if env is None else env, timeout=timeout,
+        cwd=STACK if cwd is None else cwd, check=False,
+    )
+
+
+def read_live():
+    path = STACK / '.env'
+    if path.is_symlink() or not path.is_file():
+        raise SyncError('Live .env must be a regular file, not a symlink.')
+    with path.open('rb') as stream:
+        info = os.fstat(stream.fileno())
+        data = stream.read()
+    return data, info
+
+
+def fingerprint(data):
+    return hashlib.sha256(data).digest()
+
+
+def compose_values(path):
+    # Let Compose interpret quotes, escapes, comments, and interpolation exactly
+    # as it will at deployment. This config command never starts a container.
+    config = json.dumps({'services': {'values': {
+        'image': 'scratch', 'env_file': [str(path)],
+    }}}).encode()
+    result = run(['/usr/bin/docker', 'compose', '--env-file', path,
+                  '-f', '-', 'config', '--format', 'json'], data=config)
+    if result.returncode:
+        raise SyncError('Compose could not parse the env file; details withheld.')
+    values = json.loads(result.stdout)['services']['values']['environment']
+    if not isinstance(values, dict) or any(not NAME.fullmatch(k) for k in values):
+        raise SyncError('Invalid env variable names; details withheld.')
+    if any(not isinstance(v, str) for v in values.values()):
+        raise SyncError('Unset env variables are unsupported; details withheld.')
+    # Compose serializes literal dollars as $$ so its config can be reloaded.
+    return {key: value.replace('$$', '$') for key, value in values.items()}
+
+
+def atomic_install(path, data, owner, mode):
+    fd, temp_name = tempfile.mkstemp(prefix='.daylily-env-sync-', dir=STACK)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(data)
+            os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
+            os.fchmod(stream.fileno(), mode)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+        directory = os.open(STACK, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp_name)
+
+
+def render():
+    request = json.loads(sys.stdin.buffer.read())
+    names = request['names']
+    if (not isinstance(names, list) or not names
+            or any(not isinstance(n, str) or not NAME.fullmatch(n) for n in names)
+            or len(names) != len(set(names))):
+        raise SyncError('Invalid or empty 1Password variable-name list.')
+    if 'OP_SERVICE_ACCOUNT_TOKEN' in names:
+        raise SyncError('OP_SERVICE_ACCOUNT_TOKEN cannot be an application variable.')
+    original, owner = read_live()
+    if fingerprint(original).hex() != request['live_fingerprint']:
+        raise SyncError('Live .env changed during shadow; retry.')
+    image_lines = [line for line in original.splitlines(keepends=True)
+                   if line.startswith(b'IMAGE_TAG=')]
+    if len(image_lines) != 1:
+        raise SyncError('Live .env must contain exactly one IMAGE_TAG line.')
+    values = {}
+    for name in sorted(names):
+        if name not in os.environ:
+            raise SyncError('1Password did not inject every expected variable.')
+        value = os.environ[name]
+        if "'" in value or '\n' in value or '\r' in value:
+            raise SyncError('Rejected single quote or newline in variable: ' + name)
+        # IMAGE_TAG always comes from the deploy hook, even if it appears in OP.
+        if name != 'IMAGE_TAG':
+            values[name] = value
+    first_line = image_lines[0]
+    image_tag = request.get('image_tag')
+    if image_tag is not None:
+        if not isinstance(image_tag, str) or not IMAGE_TAG_RE.fullmatch(image_tag):
+            raise SyncError('Invalid image tag.')
+        first_line = ('IMAGE_TAG="' + image_tag + '"\n').encode()
+    if not first_line.endswith(b'\n'):
+        first_line += b'\n'
+    data = first_line + ''.join(
+        name + "='" + value + "'\n" for name, value in values.items()
+    ).encode('utf-8')
+    # Validate every value before creating or replacing any shadow file.
+    if fingerprint(read_live()[0]) != fingerprint(original):
+        raise SyncError('Live .env changed during shadow; retry.')
+    atomic_install(STACK / '.env.1password', data, owner, 0o600)
+
+
+def shadow(image_tag=None):
+    original, owner = read_live()
+    if TOKEN.is_symlink() or not TOKEN.is_file():
+        raise SyncError('Token file missing or not a regular file; ask the operator.')
+    token_info = TOKEN.stat()
+    if token_info.st_uid != 0 or stat.S_IMODE(token_info.st_mode) != 0o600:
+        raise SyncError('Token file must be root-owned with mode 600.')
+    token = TOKEN.read_text().strip()
+    if not token:
+        raise SyncError('Token file is empty.')
+    op_env = dict(CLEAN_ENV, OP_SERVICE_ACCOUNT_TOKEN=token)
+    metadata = run(['/usr/bin/op', 'environment', 'secret', 'list',
+                    ENVIRONMENT, '--format=json'], env=op_env)
+    if metadata.returncode:
+        raise SyncError('1Password metadata request failed; details withheld.')
+    records = json.loads(metadata.stdout)
+    names = [record['name'] for record in records]
+    source_names = set(names)
+    del metadata, records
+    before = compose_values(STACK / '.env')
+    result = run(['/usr/bin/op', 'run', '--environment', ENVIRONMENT,
+                  '--no-masking', '--', '/usr/bin/python3', '-I', SCRIPT,
+                  '--render'], env=op_env,
+                 data=json.dumps({'names': names,
+                                  'image_tag': image_tag,
+                                  'live_fingerprint': fingerprint(original).hex()}).encode())
+    del token, op_env
+    if result.returncode:
+        # Never relay stdout/stderr from op --no-masking, including on failure.
+        raise SyncError('1Password rendering failed; shadow not updated. '
+                        'Check access and values for single quotes or newlines.')
+    if fingerprint(read_live()[0]) != fingerprint(original):
+        raise SyncError('Live .env changed during shadow; retry.')
+    after = compose_values(STACK / '.env.1password')
+    changed_values = {
+        key for key in before.keys() & after.keys()
+        if fingerprint(before[key].encode()) != fingerprint(after[key].encode())
+    }
+    for label, names in [
+        ('Names only in .env', before.keys() - source_names),
+        ('Names only in 1Password', source_names - before.keys()),
+        ('Names whose values differ', changed_values),
+    ]:
+        print(label + ': ' + (', '.join(sorted(names)) or '(none)'), flush=True)
+    if image_tag is not None:
+        if fingerprint(read_live()[0]) != fingerprint(original):
+            raise SyncError('Live .env changed before render install; retry.')
+        atomic_install(STACK / '.env', (STACK / '.env.1password').read_bytes(),
+                       owner, stat.S_IMODE(owner.st_mode))
+        changed = (before.keys() ^ after.keys()) | changed_values
+        print('Changed names: ' + (', '.join(sorted(changed)) or '(none)'), flush=True)
+    return original, owner
+
+
+def compose_up():
+    result = run(['/usr/bin/docker', 'compose', 'up', '-d'], timeout=180)
+    if result.returncode:
+        raise SyncError('docker compose up -d failed; details withheld.')
+
+
+def wait_internal():
+    deadline = time.monotonic() + 300
+    probe = ("fetch('http://127.0.0.1:3000/api/v1/status',"
+             "{redirect:'manual',signal:AbortSignal.timeout(5000)})"
+             ".then(r=>{if(r.body)r.body.cancel();process.exit(r.status===200?0:1)})"
+             ".catch(()=>process.exit(1))")
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        try:
+            result = run(['/usr/bin/docker', 'compose', 'exec', '-T', 'app',
+                          'node', '-e', probe], timeout=min(10, remaining))
+            if result.returncode == 0:
+                return
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(max(0, min(5, deadline - time.monotonic())))
+    raise SyncError('App status did not return HTTP 200 within five minutes.')
+
+
+def check_public():
+    for route in ['/', '/catalogs', '/sign-in']:
+        result = run(['/usr/bin/curl', '--silent', '--output', '/dev/null',
+                      '--write-out', '%{http_code}', '--connect-timeout', '5',
+                      '--max-time', '20', 'https://daylilycatalog.com' + route],
+                     timeout=25)
+        if result.returncode or result.stdout.strip() != b'200':
+            raise SyncError('Public HTTP 200 check failed for ' + route + '.')
+
+
+def prune_backups():
+    backups = sorted((p for p in STACK.iterdir()
+                      if BACKUP_NAME.fullmatch(p.name) and p.is_file()
+                      and not p.is_symlink()), reverse=True)
+    for backup in backups[5:]:
+        backup.unlink()
+
+
+def interrupted(signum, frame):
+    raise SyncError('Interrupted; rolling back if live .env was replaced.')
+
+
+def apply(original, owner):
+    candidate = (STACK / '.env.1password').read_bytes()
+    if candidate == original:
+        print('Shadow is identical to .env; no changes.', flush=True)
+        return
+    if fingerprint(read_live()[0]) != fingerprint(original):
+        raise SyncError('Live .env changed before apply; refusing to overwrite it.')
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+    backup = STACK / ('.env.before-1password-' + timestamp)
+    mode = stat.S_IMODE(owner.st_mode)
+    atomic_install(backup, original, owner, mode)
+    prune_backups()
+    handlers = {sig: signal.signal(sig, interrupted)
+                for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    changed = False
+    try:
+        # Set before replacement so a failure during the fsync also rolls back.
+        changed = True
+        atomic_install(STACK / '.env', candidate, owner, mode)
+        compose_up()
+        wait_internal()
+        check_public()
+    except BaseException:
+        for sig in handlers:
+            signal.signal(sig, signal.SIG_IGN)
+        if changed:
+            try:
+                atomic_install(STACK / '.env', backup.read_bytes(), owner, mode)
+            except BaseException:
+                raise SyncError('Apply failed; backup restore FAILED. Manual recovery required.') from None
+            try:
+                compose_up()
+            except BaseException:
+                raise SyncError('Apply failed; .env restored, but rollback compose FAILED.') from None
+            raise SyncError('Apply failed; .env restored and rollback compose completed.') from None
+        raise
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+    print('Applied; internal status and all public routes returned HTTP 200.', flush=True)
+
+
+def main():
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    os.umask(0o077)
+    if os.geteuid() != 0:
+        raise SyncError('Run as root: sudo daylily-env-sync shadow|apply|render <image-tag>')
+    if not ((len(sys.argv) == 2 and sys.argv[1] in ('shadow', 'apply', '--render'))
+            or (len(sys.argv) == 3 and sys.argv[1] == 'render'
+                and IMAGE_TAG_RE.fullmatch(sys.argv[2]))):
+        raise SyncError('Usage: daylily-env-sync shadow|apply|render <image-tag>')
+    if sys.argv[1] == '--render':
+        render()
+        return
+    # Use the existing deploy hook lock to preserve its ownership of IMAGE_TAG.
+    # The hook sets this marker only while it already holds the same lock.
+    deploy_locked = (sys.argv[1] == 'render'
+                     and os.environ.get('DAYLILY_DEPLOY_LOCK_HELD') == '1')
+    with (contextlib.nullcontext() if deploy_locked else LOCK.open('a')) as lock:
+        try:
+            if lock is not None:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SyncError('Daylily deploy or env sync already in progress; retry later.') from None
+        original, owner = shadow(sys.argv[2] if sys.argv[1] == 'render' else None)
+        if sys.argv[1] == 'apply':
+            apply(original, owner)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except SyncError as error:
+        print('ERROR: ' + str(error), file=sys.stderr)
+        sys.exit(1)
+    except BaseException:
+        print('ERROR: Env sync failed; details withheld to protect secrets.', file=sys.stderr)
+        sys.exit(1)
