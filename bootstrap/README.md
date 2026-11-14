@@ -16,6 +16,7 @@ This repo bootstraps a fresh Hetzner Ubuntu 24.04 host from this Mac over the ex
 - `bootstrap/local/codex-login.sh`: opens an interactive Codex login session with OpenSSH over Tailscale on the server.
 - `bootstrap/local/test-deploy-webhook.sh`: calls the managed deploy webhook for a named target and image tag.
 - `bootstrap/local/test-config-sync-webhook.sh`: calls the managed config-sync webhook for a named target and git ref.
+- `bootstrap/remote/daylily-env-sync`: writes the Daylily Catalog stack `.env` from the 1Password Environment "Daylily — Production". Install it by hand as `/usr/local/bin/daylily-env-sync` (root, mode 755). It reads a read-only service account token from `/etc/bootstrap/op/daylilycatalog.token` (root, mode 600) and needs the `op` CLI.
 - `bootstrap/local/sync-local-codex-home.sh`: syncs repo-managed global Codex defaults, including `AGENTS.md`, `machine-notes.md`, and the default Codex config, onto this machine.
 - `bootstrap/local/test-telegram-alert.sh`: sends a Telegram test message through the server's alert script.
 - `bootstrap/local/sync-local-codex-skills.sh`: syncs repo-managed Codex skills into this machine's global Codex skills directory.
@@ -190,6 +191,8 @@ The webhook accepts `POST https://<DEPLOY_WEBHOOK_HOSTNAME>/deploy/<target>` wit
 - JSON body like `{"image_tag":"main-deadbeef","clear_cache":false}`
 
 The host-side deploy runner updates `IMAGE_TAG`, runs `docker compose pull && docker compose up -d`, smoke-checks the configured URL, and sends Telegram notifications that include the previous image tag, attempted image tag, and rollback status.
+
+For the `daylilycatalog` target, the runner copies `.env` to `.env.before-deploy` and runs `daylily-env-sync render <tag>` instead of updating `IMAGE_TAG` alone. The full `.env` then comes from 1Password with the new tag. If the deploy fails, the rollback restores `.env.before-deploy`, also when the tag did not change.
 
 The same service also accepts `POST https://<DEPLOY_WEBHOOK_HOSTNAME>/sync-config/<target>` with:
 

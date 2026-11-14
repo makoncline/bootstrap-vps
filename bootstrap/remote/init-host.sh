@@ -673,7 +673,12 @@ fi
 deploy_failed=0
 rollback_status="not attempted"
 
-update_image_tag "$stack_env_file" "$new_tag"
+if [ "$target" = "daylilycatalog" ]; then
+  cp -p -- "$stack_env_file" "$stack_dir/.env.before-deploy"
+  sudo -n DAYLILY_DEPLOY_LOCK_HELD=1 /usr/local/bin/daylily-env-sync render "$new_tag"
+else
+  update_image_tag "$stack_env_file" "$new_tag"
+fi
 if ! (cd "$stack_dir" && run_bounded env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" pull) ||
    ! run_compose_update "$compose_file" "$stack_dir" "$stack_env_file" || ! smoke_check "$smoke_url"; then
   deploy_failed=1
@@ -697,9 +702,13 @@ printf 'Retaining failed-version logs before rollback\n'
 (cd "$stack_dir" && timeout --kill-after=5 10 env -u IMAGE_TAG docker compose --env-file "$stack_env_file" -f "$compose_file" logs --no-color --since 10m --tail 100) ||
   printf 'Failed-version logs are unavailable\n' >&2
 
-if [ "$auto_rollback" = "1" ] && [ "$previous_tag" != "$new_tag" ]; then
+if [ "$auto_rollback" = "1" ] && { [ "$target" = "daylilycatalog" ] || [ "$previous_tag" != "$new_tag" ]; }; then
   phase_deadline=$((SECONDS + 120))
-  update_image_tag "$stack_env_file" "$previous_tag"
+  if [ "$target" = "daylilycatalog" ]; then
+    cp -p -- "$stack_dir/.env.before-deploy" "$stack_env_file"
+  else
+    update_image_tag "$stack_env_file" "$previous_tag"
+  fi
   if run_compose_update "$compose_file" "$stack_dir" "$stack_env_file" && smoke_check "$smoke_url"; then
     rollback_status="successful"
   else
