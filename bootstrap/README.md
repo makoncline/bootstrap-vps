@@ -243,7 +243,7 @@ The command serializes updates, validates the candidate, waits for Caddy to conf
 
 The managed image starts Caddy as PID 1 with `caddy run` and a config file. This [signal reload](https://caddyserver.com/docs/command-line#signals) works with `admin off`. Do not use it with `--resume` or after API config changes. Do not use `docker kill` for reload signals: it can set Docker's manual-stop flag even when Caddy keeps running ([Moby #41302](https://github.com/moby/moby/issues/41302)). Check the Caddy logs and an uncached route after the signal; signal delivery does not confirm that the reload succeeded.
 
-The proxy pins Caddy 2.11.7 and pulls that image before startup. Signal reload requires Caddy 2.11 or later. The proxy keeps `restart: unless-stopped`, so a deliberate stop remains in effect after Docker restarts. Start it again with `docker compose -f /srv/stacks/proxy/compose.yaml up -d`.
+The proxy pins Caddy 2.11.9 and pulls that image before startup. Signal reload requires Caddy 2.11 or later. The proxy keeps `restart: unless-stopped`, so a deliberate stop remains in effect after Docker restarts. Start it again with `docker compose -f /srv/stacks/proxy/compose.yaml up -d`.
 
 Access logs are stored in `/srv/stacks/proxy/logs/access-retained.log`. Caddy rotates them at 20 MiB and keeps at most eight compressed archives, with a 168-hour archive age limit. Cleanup runs when Caddy creates a log file. Retained time depends on traffic; these limits do not guarantee seven days of history. The active file is not subject to the archive age limit. The filter removes query contents and these request headers: Authorization, Proxy-Authorization, X-Deploy-Token, Cookie, Set-Cookie, and Referer. It keeps request paths, status codes, and timing.
 
