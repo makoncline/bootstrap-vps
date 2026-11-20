@@ -76,7 +76,7 @@ with tempfile.TemporaryDirectory(prefix="bootstrap-proxy-") as directory:
         assert writer["roll_size_mb"] == 20
         assert writer["roll_keep"] == 8
         assert writer["roll_keep_days"] == 7
-        assert docker("exec", container, "caddy", "version").startswith("v2.11.7")
+        assert docker("exec", container, "caddy", "version").startswith("v2.11.9")
         before = inspect()
         assert before["HostConfig"]["RestartPolicy"]["Name"] == "unless-stopped"
 
@@ -129,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix="bootstrap-proxy-") as directory:
         repo = root / "repo"
         files = repo / "deploy/vps"
         files.mkdir(parents=True)
-        app_compose = 'services:\n  example:\n    image: caddy:2.11.7\n'
+        app_compose = 'services:\n  example:\n    image: caddy:2.11.9\n'
         (files / "compose.yaml").write_text(app_compose)
         (files / "caddy-route.caddy").write_text(previous)
         subprocess.run(["git", "init", "-q", str(repo)], check=True)

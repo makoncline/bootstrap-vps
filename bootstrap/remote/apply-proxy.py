@@ -25,8 +25,8 @@ def activate(compose):
     container = run(*prefix, 'ps', '-q', 'caddy').strip()
     if not container:
         raise RuntimeError('Caddy is not running')
-    if not run('docker', 'exec', container, 'caddy', 'version').startswith('v2.11.7 '):
-        raise RuntimeError('Caddy 2.11.7 is required')
+    if not run('docker', 'exec', container, 'caddy', 'version').startswith('v2.11.9 '):
+        raise RuntimeError('Caddy 2.11.9 is required')
     run(*prefix, 'exec', '-T', 'caddy', 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile')
     since = datetime.now(timezone.utc).isoformat()
     run(*prefix, 'exec', '-T', 'caddy', 'sh', '-c', 'kill -USR1 1')

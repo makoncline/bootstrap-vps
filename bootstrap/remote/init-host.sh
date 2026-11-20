@@ -1242,7 +1242,7 @@ ensure_proxy_stack() {
   write_if_changed "/srv/stacks/proxy/compose.yaml" <<'EOF'
 services:
   caddy:
-    image: caddy:2.11.7
+    image: caddy:2.11.9
     restart: unless-stopped
     networks:
       edge:
